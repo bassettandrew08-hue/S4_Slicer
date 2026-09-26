@@ -1,0 +1,7 @@
+{
+  "_comment": "2-iteration schedule used by tools/check_equivalence.py to test the multi-iteration path",
+  "iterations": [
+    {"NEIGHBOUR_LOSS_WEIGHT": 100, "MAX_OVERHANG": 5, "ROTATION_MULTIPLIER": 1, "SET_INITIAL_ROTATION_TO_ZERO": true},
+    {"NEIGHBOUR_LOSS_WEIGHT": 50, "MAX_OVERHANG": 30, "ROTATION_MULTIPLIER": 2}
+  ]
+}

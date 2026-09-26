@@ -1,0 +1,10 @@
+{
+  "_comment": "Iteration recipe from main.ipynb cell 5 (benchy upsidedown tilted). The recipe also mentions scale 1.5, which is not applied here.",
+  "iterations": [
+    {"NEIGHBOUR_LOSS_WEIGHT": 100, "MAX_OVERHANG": 5,  "ROTATION_MULTIPLIER": 1, "SET_INITIAL_ROTATION_TO_ZERO": true, "INITIAL_ROTATION_FIELD_SMOOTHING": 30},
+    {"NEIGHBOUR_LOSS_WEIGHT": 50},
+    {"NEIGHBOUR_LOSS_WEIGHT": 50,  "MAX_OVERHANG": 50, "ROTATION_MULTIPLIER": 3},
+    {},
+    {}
+  ]
+}
