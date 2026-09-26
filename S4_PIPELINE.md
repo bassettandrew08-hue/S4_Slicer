@@ -1,11 +1,49 @@
 # S4 headless pipeline
 
-One command, STL in, 4-axis G-code out (C/X/Z/B/E, `G93` inverse-time feed, `M83` relative E):
+One command, STL in, 4-axis G-code out (C/X/Z/B/E, `G93` inverse-time feed, `M83` relative E).
 
+## Quick start
+
+Run these from the `S4_Slicer` folder.
+
+End to end: deform, slice with CuraEngine (no Cura window), map back to 4 axes:
 ```
 venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl"
-venv\Scripts\python s4_slice.py model.stl -o out.gcode --cura-set layer_height=0.1
 ```
+The output goes to `output_gcode/<model>.gcode`. Like the notebook, this **overwrites** any existing file with that
+name. Intermediate files go to `build/<model>/`. A timing table for each stage is printed at the end.
+
+Choose the output file:
+```
+venv\Scripts\python s4_slice.py "input_models/benchy upsidedown tilted.stl" -o my_benchy.gcode
+```
+
+Run the multi-iteration benchy recipe (the notebook's cell 4 → 7 → 9 loop):
+```
+venv\Scripts\python s4_slice.py "input_models/benchy upsidedown tilted.stl" --params params/benchy_upsidedown_tilted_recipe.json
+```
+
+Change a Cura setting for one run (repeat `--cura-set` for more):
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --cura-set layer_height=0.1
+```
+
+Use a different Cura profile (save it from Cura as a project file):
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --cura-config my_profile.3mf
+```
+
+Check that the fast code still matches the original notebook code exactly (run this after any code change):
+```
+venv\Scripts\python tools\check_equivalence.py "input_models/pi 3mm.stl"
+```
+
+To see every option:
+```
+venv\Scripts\python s4_slice.py --help
+```
+
+## How it works
 
 Stages (timed and printed at the end of every run, also saved to `build/<model>/timings_<impl>.json`):
 
