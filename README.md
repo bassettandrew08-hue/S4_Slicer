@@ -4,7 +4,9 @@ A generic non-planar slicer, that can print almost any part without support.
 > **This fork** adds a one-command headless pipeline for the Core R-Theta printer: STL in, 4-axis G-code out,
 > with CuraEngine called directly (no Cura window). It has per-model settings files and a deformation that avoids
 > floating islands.
+>
 > **Start here: [S4_PIPELINE.md](S4_PIPELINE.md)** (setup, tutorial, settings reference).
+>
 > What changed from the original notebook, and why: [CHANGELOG.md](CHANGELOG.md).
 >
 > ```
