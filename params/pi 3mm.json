@@ -1,0 +1,34 @@
+{
+  "description": "",
+  "deform": {
+    "PART_OFFSET": [0.0, 0.0, 0.0],
+    "NEIGHBOUR_LOSS_WEIGHT": 30,
+    "MAX_OVERHANG": 30,
+    "ROTATION_MULTIPLIER": 2,
+    "SET_INITIAL_ROTATION_TO_ZERO": false,
+    "INITIAL_ROTATION_FIELD_SMOOTHING": 30,
+    "ROTATION_ITERATIONS": 100,
+    "DEFORMATION_ITERATIONS": 1000,
+    "STEEP_OVERHANG_COMPENSATION": true,
+    "MAX_POS_ROTATION_DEG": 360.0,
+    "MAX_NEG_ROTATION_DEG": -360.0
+  },
+  "map": {
+    "SEG_SIZE": 0.6,
+    "MAX_ROTATION": 30,
+    "MIN_ROTATION": -130,
+    "NOZZLE_OFFSET": 42,
+    "ROTATION_AVERAGING_ALPHA": 0.2,
+    "MAX_EXTRUSION_MULTIPLIER": 10,
+    "RETRACTION_LENGTH": null,
+    "SPLIT_RETRACTIONS": true,
+    "SMOOTH_EXTRUSION_MULTIPLIER": true,
+    "EXTRUSION_MULTIPLIER_RANGE": [0.5, 2.0],
+    "ROTATION_MAX_DELTA_DEG": 1.0
+  },
+  "cura": {
+    "config": "cura_config.3mf",
+    "set": {},
+    "strip_start_prime": true
+  }
+}
