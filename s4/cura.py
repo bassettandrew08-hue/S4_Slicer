@@ -474,4 +474,4 @@ def slice_stl(stl_path, out_gcode, threemf, overrides=None, cura_engine=None, lo
         log(f"[slice] CuraEngine reported {len(errors)} error lines, first: {errors[0]}")
     with open(os.path.join(os.path.dirname(os.path.abspath(out_gcode)), "cura_engine.log"), "w") as fh:
         fh.write(" ".join(f'"{a}"' if " " in a else a for a in args) + "\n\n" + proc.stderr)
-    return {"global": g, "extruder": e, "args": args}
+    return {"global": g, "extruder": e, "args": args, "project": proj}

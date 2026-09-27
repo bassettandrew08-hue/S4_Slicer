@@ -25,6 +25,11 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     if params:
         prof = profiles.merge(prof, params, where="params")
     p = profiles.deform_params(prof)
+    overrides = {k: str(v) if not isinstance(v, str) else v for k, v in prof["cura"]["set"].items()}
+    if prof["cura"]["strip_start_prime"] and "machine_start_gcode" not in overrides:
+        # Cura's start code primes (G1 F200 E3) at the park position, which the mapper would place
+        # inside the part as a floating blob; the S4 header already primes at home (G1 E10).
+        overrides["machine_start_gcode"] = "G28 ; home"
     name = os.path.splitext(os.path.basename(model_path))[0]
     work_dir = work_dir or os.path.join("build", name)
     os.makedirs(work_dir, exist_ok=True)
@@ -66,11 +71,6 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
         if sliced_gcode is None:
             with TIMER("2. slice (CuraEngine)"):
                 from .cura import slice_stl
-                overrides = {k: str(v) if not isinstance(v, str) else v for k, v in prof["cura"]["set"].items()}
-                if prof["cura"]["strip_start_prime"] and "machine_start_gcode" not in overrides:
-                    # Cura's start code primes (G1 F200 E3) at the park position, which the mapper would place
-                    # inside the part as a floating blob; the S4 header already primes at home (G1 E10).
-                    overrides["machine_start_gcode"] = "G28 ; home"
                 cura_info = slice_stl(stl_path, planar_path, profiles.cura_config_path(prof), overrides, cura_engine, log=log)
         else:
             log(f"[slice] using existing planar G-code {sliced_gcode}")
@@ -110,6 +110,23 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     poles = sc2.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"])
     stats["poles"] = len(poles[0])
     log(sc2.format_vertical(poles))
+    if support_check:
+        stats["ungrounded_mm"] = round(support["ungrounded_mm"], 1)
+
+    # settings comments for the R-Theta simulator, at the top of the final G-code
+    from . import sim_header
+    from . import fast_deform as _fd
+    info = cura_info
+    if info is None:  # sliced elsewhere: rebuild the Cura settings (no slicing) so ;SETTING_3 can still be written
+        try:
+            from .cura import build_settings
+            proj, g, e = build_settings(profiles.cura_config_path(prof), overrides, cura_engine)
+            info = {"project": proj, "global": g, "extruder": e}
+        except Exception:
+            info = None
+    shown = dict(prof); shown["map"] = dict(prof["map"], RETRACTION_LENGTH=retraction)  # the value actually used
+    header = sim_header.build(name, shown, stats, planar_path, info, _fd.LAST_DEFORM_INFO)
+    sim_header.prepend(out_gcode, header)
     total = time.perf_counter() - t0
     log(f"[map] {stats}")
     log(f"[done] {out_gcode}  ({total:.1f} s)")

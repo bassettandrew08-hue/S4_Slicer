@@ -150,6 +150,19 @@ what the ends of each run connect to:
 
 Some bridging is normal: sparse gyroid infill does it even in a flat print. Skip the check with `--no-support-check`.
 
+**The top of every output G-code** is a settings block, which R-Theta Sim reads to show and compare runs:
+- **Cura's header lines:** `;FLAVOR:`, `;Layer height:`, `;Generated with …`.
+- **`;SETTING_3` lines** in Cura's own format: every Cura setting changed from the profile defaults. They're copied
+  from the planar G-code when it came from the Cura GUI, and generated for headless slices, because CuraEngine alone
+  doesn't write them.
+- **`; s4: KEY = value` lines:**
+  - the model name and pipeline version
+  - every deform and map setting (per iteration, too), and the Cura overrides
+  - the deformation's diagnostics
+  - the run's numbers: `failed_points`, `floating_points`, `ungrounded_mm`, `poles`, ...
+
+The block is deterministic (no timestamps), so two runs with the same settings give identical files.
+
 Files in `build/<model>/`:
 
 | file | contents |
@@ -288,7 +301,8 @@ byte-identical output (section 6). The speed-ups in the fast one are listed in t
 
 ## 8. Differences from the notebook
 
-These are on by default. `--notebook-exact` turns all of them off and reproduces the notebook's output byte for byte.
+These are on by default. `--notebook-exact` turns all of them off and reproduces the notebook's output byte for byte
+(everything after the settings block described in section 4).
 The rotation (tilt) field is the notebook's in every case.
 
 | what | setting | difference |

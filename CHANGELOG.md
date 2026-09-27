@@ -6,6 +6,28 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
 
 ---
 
+## 2026-09-27: Settings block for R-Theta Sim
+
+### Added
+- **Settings comments at the top of every output G-code** (`s4/sim_header.py`):
+  - Cura's header lines
+  - Cura-format `;SETTING_3` lines: every Cura setting changed from the profile defaults. They're generated for
+    headless slices, which CuraEngine alone doesn't provide.
+  - `; s4: KEY = value` lines: the settings used, the deformation's diagnostics, and the run's quality numbers
+
+  The block is deterministic, so fast and reference outputs stay identical. `--notebook-exact` output matches the
+  notebook byte for byte after the block.
+
+### Notes
+- `;SETTING_3` is written exactly as Cura writes it: the JSON is escaped (`\` → `\`, newline → `
+`) before
+  it's split into 80-character comment lines. A reader has to undo that escaping before parsing the JSON, as Cura's
+  own G-code reader does.
+- CuraEngine's placeholder `;MINX…;MAXZ` values (`2.14748e+06`) and `;Filament used: 0m` aren't copied, since they
+  aren't real measurements.
+
+---
+
 ## 2026-09-27: No more "poles" at the base
 
 ### Fixed (on by default; `--notebook-exact` restores the notebook's behaviour)

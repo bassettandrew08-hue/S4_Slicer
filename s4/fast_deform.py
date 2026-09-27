@@ -427,14 +427,19 @@ def next_iteration_mesh(ctx, prev_tet, new_vertices):
     return t
 
 
+LAST_DEFORM_INFO = None  # diagnostics of the most recent island_free deformation (for the G-code header)
+
+
 def deformation_step(tet, rf, p, last=True, verbose=0, log=print):
     """Rotation field -> deformed vertices, with the method chosen in the profile."""
+    global LAST_DEFORM_INFO
     method = p.get("DEFORMATION_METHOD", "island_free")
+    LAST_DEFORM_INFO = None
     if method == "notebook":
         return calculate_deformation(tet, rf, p["DEFORMATION_ITERATIONS"], verbose)
     if method == "island_free":
         from . import island_free
-        nv, _ = island_free.deform(tet.points, tet.field_data["cells"], np.asarray(tet.cell_data["cell_center"]),
+        nv, LAST_DEFORM_INFO = island_free.deform(tet.points, tet.field_data["cells"], np.asarray(tet.cell_data["cell_center"]),
                                    rf, p, lift=last, log=log)
         return nv
     raise ValueError(f"unknown DEFORMATION_METHOD {method!r} (use 'island_free' or 'notebook')")
