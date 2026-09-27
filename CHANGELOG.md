@@ -6,6 +6,31 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
 
 ---
 
+## 2026-09-27: No more "poles" at the base
+
+### Fixed (on by default; `--notebook-exact` restores the notebook's behaviour)
+- **Vertical filament "poles"** (`SAFE_TRAVEL_TRANSITIONS`). When a travel leaves the part's mesh, the notebook lifts
+  it to the highest point printed so far, and keeps the first point back on the part at that height too. If the next
+  move prints, it extruded from the lifted point straight down to the layer. On the upside-down benchy's first
+  layers, that drew 8 sticks of 4–6 mm standing on the bed. Now the nozzle travels down to the re-entry point's true
+  height first. If the re-entry move is itself a print move, it's travelled over instead of extruded, because its
+  start was off the part.
+- **Extruding `G00` lines.** When a move needs a big B rotation, it's split into small steps. The notebook labelled
+  those steps with the *previous* move's command, so the first print move after a travel came out as `G00` lines
+  carrying extrusion. Each step now carries its own move's command.
+
+### Added
+- **`[quality]` line after every run.** It rebuilds the nozzle-tip path from the final 4-axis G-code and reports
+  **poles**: extruding moves that go more than 2 mm straight down right after a travel. It also reports steep
+  extruding segments for information.
+
+### Results
+- **Benchy (same planar slice):** poles 8 → 0; steep extruding segments 7 → 1 (the one left is a real steep stretch
+  of layer).
+- **Every model in `input_models/`** (benchy, pi, Squirtle, dino, z mount, B-axis mount) reports no poles.
+
+---
+
 ## 2026-09-27: Island-free deformation
 
 ### Added

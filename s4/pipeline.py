@@ -106,6 +106,10 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
                                    seg_size=mp["SEG_SIZE"])
             stats["floating_points"] = support["floating_points"]
             log(sc.format_report(support))
+    from . import support_check as sc2
+    poles = sc2.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"])
+    stats["poles"] = len(poles[0])
+    log(sc2.format_vertical(poles))
     total = time.perf_counter() - t0
     log(f"[map] {stats}")
     log(f"[done] {out_gcode}  ({total:.1f} s)")

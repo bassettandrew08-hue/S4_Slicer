@@ -221,3 +221,47 @@ def _format_local(r):
     if r["outside_part_points"]:
         s += f"\n[support]   {r['outside_part_points']} points map >0.5 mm outside the model"
     return s
+
+
+def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0):
+    """Extruding moves in the final 4-axis G-code whose nozzle-tip path is mostly vertical and longer than min_dz.
+    Returns (poles, steep): poles start right after a travel and drop more than pole_dz (extrusion dragged down from
+    a lifted travel point: these print as free-standing sticks); steep ones are the rest, typically a steep stretch
+    of curved layer."""
+    import re
+    word = re.compile(r"([CXZBE])(-?\d+(?:\.\d*)?|-?\.\d+)")
+    rows = []
+    with open(gcode_path) as fh:
+        for n, line in enumerate(fh, 1):
+            if not line.startswith(("G0", "G1")):
+                continue
+            w = dict(word.findall(line))
+            if "X" in w:
+                rows.append((n, float(w["C"]), float(w["X"]), float(w["Z"]), float(w["B"]), float(w.get("E", "nan"))))
+    if len(rows) < 2:
+        return [], []
+    a = np.array(rows)
+    b = np.radians(a[:, 4]); th = np.radians(a[:, 1])
+    r = a[:, 2] + np.sin(b) * nozzle_offset
+    z = a[:, 3] - (np.cos(b) - 1) * nozzle_offset
+    P = np.c_[r * np.cos(th), r * np.sin(th), z]
+    d = np.diff(P, axis=0)
+    dz = np.abs(d[:, 2]); dxy = np.hypot(d[:, 0], d[:, 1])
+    E = a[:, 5]
+    printing = (np.nan_to_num(E) > 0) & ~np.isclose(E, 1.0)
+    bad = printing[1:] & (dz > min_dz) & (dxy < 0.5 * dz)
+    poles, steep = [], []
+    for k in np.nonzero(bad)[0]:
+        item = (int(a[k + 1, 0]), float(P[k, 2]), float(P[k + 1, 2]), [round(float(v), 1) for v in P[k + 1, :2]])
+        (poles if (not printing[k] and dz[k] > pole_dz) else steep).append(item)
+    return poles, steep
+
+
+def format_vertical(result):
+    poles, steep = result
+    s = f"[quality] poles (extruding >2 mm straight down from a travel): {len(poles) or 'none'}"
+    for line, z0, z1, xy in poles[:3]:
+        s += f"\n[quality]   G-code line {line}: z {z0:.1f} -> {z1:.1f} at {xy}"
+    if steep:
+        s += f"\n[quality] steep extruding segments (>1 mm, mostly vertical; usually a steep stretch of curved layer): {len(steep)}"
+    return s

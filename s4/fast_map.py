@@ -35,6 +35,11 @@ MAPPING_DEFAULTS = dict(
     # tet boundaries). True = volume-weighted per-vertex ratio, interpolated barycentrically like position.
     SMOOTH_EXTRUSION_MULTIPLIER=False,
     EXTRUSION_MULTIPLIER_RANGE=None,  # e.g. (0.5, 2.0): clamp the volume-ratio multiplier
+    # False = notebook-exact. True = (a) after a travel that left the part (lifted to the highest printed point),
+    # lower to the re-entry point's true height before the next move instead of printing downward from the lifted
+    # point (that drew vertical "poles"); (b) rotation-interpolation steps carry the command of the move they belong
+    # to (the notebook used the previous move's, giving extruding G00 lines and non-extruding G01 lines).
+    SAFE_TRAVEL_TRANSITIONS=False,
 )
 
 _WORD = re.compile(r"([A-Za-z])\s*(-?(?:\d+\.?\d*|\.\d+))")
@@ -251,6 +256,7 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
     MAXE = mp["MAX_EXTRUSION_MULTIPLIER"]
     SPLIT = mp["SPLIT_RETRACTIONS"]
     MRANGE = mp["EXTRUSION_MULTIPLIER_RANGE"]
+    SAFE = mp["SAFE_TRAVEL_TRANSITIONS"]
     lim45 = float(np.deg2rad(45))
 
     commands = g["command"]
@@ -287,11 +293,16 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
         inv_time_feed = inv_feeds[i]
         extrusion = extrusions[i]
         dont_smooth_rotation = False
+        reentry = None
         if ok[i]:
             new_position = list(newp[i])
             rotation = rots[i]
             if travelling_over_air:
-                new_position[2] = highest_printed_point
+                if SAFE:
+                    reentry = list(new_position)
+                    new_position[2] = max(highest_printed_point, new_position[2])
+                else:
+                    new_position[2] = highest_printed_point
                 rotation = max(min(rotation, lim45), -lim45)
                 dont_smooth_rotation = True
             travelling_over_air = False
@@ -307,6 +318,10 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
             else:
                 continue
 
+        move_command = command
+        if reentry is not None and command == "G01" and extrusion is not None and extrusion != RET and extrusion != -RET:
+            # a print move whose start was off the part: travel over its end point instead of extruding in the air
+            move_command = "G00"; extrusion = None; lost += 1
         extrusion_multiplier = 1
         if extrusion is not None and extrusion != RET and extrusion != -RET:
             extrusion_multiplier = extrusion_multiplier * squish[i]
@@ -340,9 +355,14 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
             for k in range(n):
                 s = (k + 1) / n
                 emit((prev_new_position[0] + dx * s, prev_new_position[1] + dy * s, prev_new_position[2] + dz * s),
-                     prev_rotation + delta_rotation * s, prev_command, e_i, f_i, prev_travelling, feeds[i])
+                     prev_rotation + delta_rotation * s, move_command if SAFE else prev_command, e_i, f_i,
+                     prev_travelling, feeds[i])
         else:
-            emit(tuple(new_position), rotation, command, motion_extrusion, inv_time_feed, travelling, feeds[i])
+            emit(tuple(new_position), rotation, move_command, motion_extrusion, inv_time_feed, travelling, feeds[i])
+
+        if reentry is not None and reentry[2] != new_position[2]:  # lower to the true height, as a travel
+            emit(tuple(reentry), rotation, "G00", None, None, travelling, feeds[i])
+            new_position = reentry
 
         if split and extrusion > 0:  # plunge first, then unretract in place
             if o_trav[-1] != travelling:  # rotation-interpolated motion stayed hopped: plunge without E
@@ -352,7 +372,7 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
         prev_rotation = rotation
         prev_new_position = list(new_position)
         prev_travelling = travelling
-        prev_command = command
+        prev_command = move_command if SAFE else command
 
         if command == "G01" and extrusion is not None and extrusion > 0 and (highest_printed_point != 0 or new_position[2] < 1):
             highest_printed_point = max(highest_printed_point, new_position[2])

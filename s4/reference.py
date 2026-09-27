@@ -754,6 +754,7 @@ MAPPING_DEFAULTS = dict(
     SPLIT_RETRACTIONS=False,  # not in the notebook; see map_gcode
     SMOOTH_EXTRUSION_MULTIPLIER=False,  # not in the notebook; see s4/fast_map.py
     EXTRUSION_MULTIPLIER_RANGE=None,  # not in the notebook; see s4/fast_map.py
+    SAFE_TRAVEL_TRANSITIONS=False,  # not in the notebook; see s4/fast_map.py
 )
 
 
@@ -940,6 +941,7 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
         SPLIT_RETRACTIONS = mp["SPLIT_RETRACTIONS"]
         SMOOTH_EXTRUSION_MULTIPLIER = mp["SMOOTH_EXTRUSION_MULTIPLIER"]
         EXTRUSION_MULTIPLIER_RANGE = mp["EXTRUSION_MULTIPLIER_RANGE"]
+        SAFE_TRAVEL_TRANSITIONS = mp["SAFE_TRAVEL_TRANSITIONS"]
         last_bary = {}
         lost_vertices = []
         highest_printed_point = 0
@@ -976,6 +978,7 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
                 return new_position, rotation
 
             dont_smooth_rotation = False
+            reentry = None
             new_position, rotation = barycentric_interpolate_to_get_new_position_and_rotation(position, containing_cell_index, command, cell_index)
             if new_position is None:
                 if command == "G01":
@@ -992,11 +995,18 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
                     continue
             else:
                 if travelling_over_air:
-                    new_position[2] = highest_printed_point
+                    if SAFE_TRAVEL_TRANSITIONS:  # not in the notebook
+                        reentry = new_position.copy()
+                        new_position[2] = max(highest_printed_point, new_position[2])
+                    else:
+                        new_position[2] = highest_printed_point
                     rotation = max(min(rotation, np.deg2rad(45)), np.deg2rad(-45))
                     dont_smooth_rotation = True
                 travelling_over_air = False
 
+            move_command = command
+            if reentry is not None and command == "G01" and extrusion is not None and extrusion != RETRACTION_LENGTH and extrusion != -RETRACTION_LENGTH:
+                move_command = "G00"; extrusion = None; lost_vertices.append(position)  # not in the notebook
             extrusion_multiplier = 1
             if extrusion is not None and extrusion != RETRACTION_LENGTH and extrusion != -RETRACTION_LENGTH:
                 if SMOOTH_EXTRUSION_MULTIPLIER:  # not in the notebook
@@ -1036,7 +1046,7 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
                         "position": prev_new_position + (delta_pos * ((i + 1) / num_interpolations)),
                         "original_position": position,
                         "rotation": prev_rotation + (delta_rotation * ((i + 1) / num_interpolations)),
-                        "command": prev_command,
+                        "command": move_command if SAFE_TRAVEL_TRANSITIONS else prev_command,
                         "extrusion": motion_extrusion / num_interpolations if motion_extrusion is not None else None,
                         "inv_time_feed": inv_time_feed * num_interpolations if inv_time_feed is not None else None,
                         "extrusion_multiplier": extrusion_multiplier,
@@ -1048,13 +1058,21 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
                     "position": new_position,
                     "original_position": position,
                     "rotation": rotation,
-                    "command": command,
+                    "command": move_command,
                     "extrusion": motion_extrusion,
                     "inv_time_feed": inv_time_feed,
                     "extrusion_multiplier": extrusion_multiplier,
                     "feed": gcode_point["feed"],
                     "travelling": travelling
                 })
+
+            if reentry is not None and reentry[2] != new_position[2]:  # not in the notebook: lower as a travel
+                new_gcode_points.append({
+                    "position": reentry.copy(), "original_position": position, "rotation": rotation,
+                    "command": "G00", "extrusion": None, "inv_time_feed": None,
+                    "extrusion_multiplier": extrusion_multiplier, "feed": gcode_point["feed"],
+                    "travelling": travelling})
+                new_position = reentry
 
             if split and extrusion > 0:  # plunge first, then unretract in place
                 if new_gcode_points[-1]["travelling"] != travelling:  # interpolated motion stayed hopped
@@ -1072,7 +1090,7 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
             prev_rotation = rotation
             prev_new_position = new_position.copy()
             prev_travelling = travelling
-            prev_command = command
+            prev_command = move_command if SAFE_TRAVEL_TRANSITIONS else command
 
             if command == "G01" and extrusion is not None and extrusion > 0 and (highest_printed_point != 0 or new_position[2] < 1):
                 highest_printed_point = max(highest_printed_point, new_position[2])

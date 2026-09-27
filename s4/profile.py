@@ -39,6 +39,7 @@ MAP_DEFAULTS = dict(
     SPLIT_RETRACTIONS=True,         # retract/unretract in place instead of during the travel lift/plunge
     SMOOTH_EXTRUSION_MULTIPLIER=True,
     EXTRUSION_MULTIPLIER_RANGE=[0.5, 2.0],  # or null for no clamp
+    SAFE_TRAVEL_TRANSITIONS=True,   # lower before printing after a travel that left the part; no extruding G00
 )
 CURA_DEFAULTS = dict(
     config="cura_config.3mf",       # Cura project with the base profile (relative to the repo folder)
@@ -46,7 +47,7 @@ CURA_DEFAULTS = dict(
     strip_start_prime=True,         # drop Cura's start-code prime (it would land inside the part)
 )
 NOTEBOOK_EXACT = {"deform": {"DEFORMATION_METHOD": "notebook"},
-                  "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False,
+                  "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False, "SAFE_TRAVEL_TRANSITIONS": False,
                           "EXTRUSION_MULTIPLIER_RANGE": None},
                   "cura": {"strip_start_prime": False}}
 DEG_KEYS = {"MAX_POS_ROTATION", "MAX_NEG_ROTATION", "ROTATION_MAX_DELTA"}

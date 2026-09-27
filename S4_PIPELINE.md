@@ -128,6 +128,7 @@ A run prints these lines, in order:
 | `[deform]` | the deformation's own check (inverted tets, island seeds left) and where the deformed STL went |
 | `[slice]` | the key Cura values actually used (layer height, line width, retraction, flavor, ...) |
 | `[support]` | plastic that would be printed in mid-air, by kind (see below) |
+| `[quality]` | poles: extrusion dragged more than 2 mm straight down from a travel (should always say "none"), and steep extruding segments (informational) |
 | `[map]` | point counts from the mapping step |
 | timing table | seconds per stage |
 
@@ -210,6 +211,7 @@ Every section and key is optional; anything left out keeps its default.
 | `EXTRUSION_MULTIPLIER_RANGE` | [0.5, 2.0] | clamp on the extrusion compensation (`null` = off) |
 | `SMOOTH_EXTRUSION_MULTIPLIER` | true | smooth the extrusion compensation (section 8) |
 | `SPLIT_RETRACTIONS` | true | retract/unretract in place (section 8) |
+| `SAFE_TRAVEL_TRANSITIONS` | true | after a travel that left the part, lower before printing; rotation steps keep their own move's command (section 8) |
 | `RETRACTION_LENGTH` | null | mm; `null` = use Cura's `retraction_amount` |
 
 ### `cura`: slicing
@@ -295,6 +297,7 @@ The rotation (tilt) field is the notebook's in every case.
 | retractions | `SPLIT_RETRACTIONS` | retract/unretract in place, at Cura's retraction speed (the notebook extruded during a 1 mm plunge, leaving "sticks") |
 | extrusion compensation | `SMOOTH_EXTRUSION_MULTIPLIER`, `EXTRUSION_MULTIPLIER_RANGE` | blended smoothly along the path and clamped to 0.5×–2× (was constant per tet, so flow jumped) |
 | start code | `strip_start_prime` | Cura's prime is dropped (it became a floating blob inside the part) |
+| travel re-entry | `SAFE_TRAVEL_TRANSITIONS` | after a travel that left the part, the nozzle lowers before printing (the notebook printed downward from the lifted point, drawing "poles"); rotation-split steps keep their own move's command |
 | nozzle offset | `NOZZLE_OFFSET` | taken from the profile (was hard-coded to 42) |
 
 Why each of these was needed, with measurements, is in the [changelog](CHANGELOG.md).
