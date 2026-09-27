@@ -28,6 +28,9 @@ MAPPING_DEFAULTS = dict(
     RETRACTION_LENGTH=1.0,
     ROTATION_MAX_DELTA=float(np.deg2rad(1)),
     MAX_EXTRUSION_MULTIPLIER=10,
+    # False = notebook-exact. True = retract/unretract in place (E-only line at Cura's feed) instead of
+    # extruding +/-RETRACTION_LENGTH during the 1 mm travel lift/plunge (which leaves filament "sticks").
+    SPLIT_RETRACTIONS=False,
 )
 
 _WORD = re.compile(r"([A-Za-z])\s*(-?(?:\d+\.?\d*|\.\d+))")
@@ -228,17 +231,29 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
     RET = mp["RETRACTION_LENGTH"]
     MAXD = mp["ROTATION_MAX_DELTA"]
     MAXE = mp["MAX_EXTRUSION_MULTIPLIER"]
+    SPLIT = mp["SPLIT_RETRACTIONS"]
     lim45 = float(np.deg2rad(45))
 
     commands = g["command"]
     extrusions = g["extrusion"]
     inv_feeds = g["inv_time_feed"]
+    feeds = g["feed"]
     newp = new_pos_all.tolist()
     rots = rot_all.tolist()
     ok = bary_ok.tolist()
     squish = squish_all.tolist()
 
-    o_pos, o_rot, o_cmd, o_ext, o_inv, o_trav = [], [], [], [], [], []
+    o_pos, o_rot, o_cmd, o_ext, o_inv, o_trav, o_feed, o_eonly = [], [], [], [], [], [], [], []
+
+    def emit(pos, rot, cmd, ext, inv, trav, feed, e_only=False):
+        o_pos.append(pos)
+        o_rot.append(rot)
+        o_cmd.append(cmd)
+        o_ext.append(ext)
+        o_inv.append(inv)
+        o_trav.append(trav)
+        o_feed.append(feed)
+        o_eonly.append(e_only)
     prev_new_position = None
     travelling_over_air = False
     travelling = False
@@ -284,29 +299,34 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
         if prev_rotation is not None and not dont_smooth_rotation:
             rotation = ALPHA * rotation + (1 - ALPHA) * prev_rotation
 
+        # retraction event: optionally move the E value onto its own zero-motion line
+        split = SPLIT and extrusion is not None and (extrusion == RET or extrusion == -RET)
+        motion_extrusion = None if split else extrusion
+        if split and extrusion < 0:  # retract in place first, then lift
+            if prev_new_position is not None:
+                emit(tuple(prev_new_position), prev_rotation, "G01", extrusion, None, prev_travelling, feeds[i], True)
+            else:
+                emit(tuple(new_position), rotation, "G01", extrusion, None, prev_travelling, feeds[i], True)
+
         if prev_new_position is not None and abs(rotation - prev_rotation) > MAXD:
             delta_rotation = rotation - prev_rotation
             n = int(abs(delta_rotation) / MAXD) + 1
             dx = new_position[0] - prev_new_position[0]
             dy = new_position[1] - prev_new_position[1]
             dz = new_position[2] - prev_new_position[2]
-            e_i = extrusion / n if extrusion is not None else None
+            e_i = motion_extrusion / n if motion_extrusion is not None else None
             f_i = inv_time_feed * n if inv_time_feed is not None else None
             for k in range(n):
                 s = (k + 1) / n
-                o_pos.append((prev_new_position[0] + dx * s, prev_new_position[1] + dy * s, prev_new_position[2] + dz * s))
-                o_rot.append(prev_rotation + delta_rotation * s)
-                o_cmd.append(prev_command)
-                o_ext.append(e_i)
-                o_inv.append(f_i)
-                o_trav.append(prev_travelling)
+                emit((prev_new_position[0] + dx * s, prev_new_position[1] + dy * s, prev_new_position[2] + dz * s),
+                     prev_rotation + delta_rotation * s, prev_command, e_i, f_i, prev_travelling, feeds[i])
         else:
-            o_pos.append(tuple(new_position))
-            o_rot.append(rotation)
-            o_cmd.append(command)
-            o_ext.append(extrusion)
-            o_inv.append(inv_time_feed)
-            o_trav.append(travelling)
+            emit(tuple(new_position), rotation, command, motion_extrusion, inv_time_feed, travelling, feeds[i])
+
+        if split and extrusion > 0:  # plunge first, then unretract in place
+            if o_trav[-1] != travelling:  # rotation-interpolated motion stayed hopped: plunge without E
+                emit(tuple(new_position), rotation, command, None, None, travelling, feeds[i])
+            emit(tuple(new_position), rotation, "G01", extrusion, None, travelling, feeds[i], True)
 
         prev_rotation = rotation
         prev_new_position = list(new_position)
@@ -317,7 +337,7 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
             highest_printed_point = max(highest_printed_point, new_position[2])
 
     return {"position": o_pos, "rotation": o_rot, "command": o_cmd, "extrusion": o_ext,
-            "inv_time_feed": o_inv, "travelling": o_trav, "_lost": lost}
+            "inv_time_feed": o_inv, "travelling": o_trav, "feed": o_feed, "e_only": o_eonly, "_lost": lost}
 
 
 def write_gcode(pts, out_path, NOZZLE_OFFSET=42):
@@ -348,6 +368,8 @@ def write_gcode(pts, out_path, NOZZLE_OFFSET=42):
     cmds = pts["command"]
     exts = pts["extrusion"]
     invs = pts["inv_time_feed"]
+    e_only = pts.get("e_only") or [False] * len(cmds)
+    feeds = pts.get("feed")
     lines = [
         "G94 ; mm/min feed  \n",
         "G28 ; home \n",
@@ -365,7 +387,11 @@ def write_gcode(pts, out_path, NOZZLE_OFFSET=42):
         if e is not None:
             s += f" E{e:.4f}"
         f = invs[i]
-        if f is not None:
+        if e_only[i]:  # zero-motion retract/unretract at the planar G-code's feed (mm/min)
+            lines.append("G94\n")
+            lines.append(s + f" F{feeds[i]:g}\n")
+            lines.append("G93\n")
+        elif f is not None:
             lines.append(s + f" F{f:.4f}\n")
         else:
             lines.append("G94\n")

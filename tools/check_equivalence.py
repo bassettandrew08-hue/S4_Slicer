@@ -41,6 +41,7 @@ def main():
     ap.add_argument("--tol-ang", type=float, default=1e-3)
     ap.add_argument("--tol-e", type=float, default=1e-4)
     ap.add_argument("--params")
+    ap.add_argument("--notebook-exact", action="store_true", help="pass --notebook-exact to both runs")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="extra args for the candidate run")
     a = ap.parse_args()
 
@@ -51,6 +52,8 @@ def main():
     ref_out = os.path.join(ref_dir, f"{name}.gcode")
     cand_out = os.path.join(cand_dir, f"{name}.gcode")
     extra = ["--params", a.params] if a.params else []
+    if a.notebook_exact:
+        extra.append("--notebook-exact")
 
     if not a.reference_dir or not os.path.exists(ref_out):
         run([PY, "s4_slice.py", a.model, "--impl", "reference", "--work-dir", ref_dir, "-o", ref_out] + extra)

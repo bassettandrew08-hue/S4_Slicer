@@ -11,10 +11,13 @@ from .params import DEFAULT_PARAMS
 
 
 def run(model_path, out_gcode, impl="fast", work_dir=None, cura_config="cura_config.3mf", cura_overrides=None,
-        cura_engine=None, params=None, sliced_gcode=None, save_gif=False, save_pickle=False, log=print):
+        cura_engine=None, params=None, sliced_gcode=None, save_gif=False, save_pickle=False, notebook_exact=False,
+        log=print):
     """
     impl: "fast" (default) or "reference" (the verified notebook port, slow).
     sliced_gcode: use this planar G-code instead of running CuraEngine (e.g. for A/B checks).
+    notebook_exact: keep the notebook's retract-while-lifting / unretract-while-plunging moves
+        (default False: retract/unretract in place, see SPLIT_RETRACTIONS in s4/fast_map.py).
     Returns dict with paths, stats and timings.
     """
     p = dict(DEFAULT_PARAMS)
@@ -66,7 +69,7 @@ def run(model_path, out_gcode, impl="fast", work_dir=None, cura_config="cura_con
 
         # ---- 3. map back to 4 axes
         with TIMER("3. map to 4-axis G-code"):
-            mp = {"RETRACTION_LENGTH": retraction}
+            mp = {"RETRACTION_LENGTH": retraction, "SPLIT_RETRACTIONS": not notebook_exact}
             if impl == "reference":
                 from . import reference as ref
                 pts, stats = ref.map_gcode(input_tet, deformed, planar_path, mp)

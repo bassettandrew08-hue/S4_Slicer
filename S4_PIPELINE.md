@@ -38,6 +38,11 @@ Check that the fast code still matches the original notebook code exactly (run t
 venv\Scripts\python tools\check_equivalence.py "input_models/pi 3mm.stl"
 ```
 
+Reproduce the notebook's output exactly, including its retraction behaviour (see Known issues):
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --notebook-exact
+```
+
 To see every option:
 ```
 venv\Scripts\python s4_slice.py --help
@@ -119,6 +124,22 @@ What makes the fast path fast. Every change preserves the output:
 * the mapper uses batched LAPACK for the Kabsch fits, volumes and barycentrics, and a regex G-code reader instead of
   pygcode. `find_closest_cell` only runs where it's needed. `calculate_tet_attributes(deformed)` is skipped, since only
   connectivity, points and cell centres are used.
+
+## Fixed: filament "sticks" at every retraction (on by default)
+
+The notebook marks points between a 1 mm retract (`E-1`) and the matching unretract (`E+1`) as travelling, and it
+writes travelling points 1 mm further out along the tool axis (`z_hop`). So each retract came out as "lift 1 mm while
+retracting", and each unretract as "plunge 1 mm while extruding 1 mm of filament", at `G94 F20000`. That's about 100×
+a normal segment's E on a vertical path, which shows up as a stick of filament.
+
+Old GUI slices used 6.5 mm retraction, which never matched the notebook's 1.0 constant, so this never fired. The 3mf's
+1 mm retraction triggers it at almost every travel (about 940 times on the pi).
+
+Now the pipeline retracts in place, then lifts, travels, lowers, and unretracts in place. The E-only lines are written
+as `G94` + `F<Cura's retraction feed>` (F3600 here), then `G93`. This is option `SPLIT_RETRACTIONS` in the mapper,
+and both implementations apply it identically. `--notebook-exact` turns it off and reproduces the old output byte for
+byte. Note that CuraEngine itself is not deterministic: two slices of the same STL differ by about 0.01 mm on a few
+hundred lines. So compare outputs using the same planar G-code (`--sliced-gcode`), as `check_equivalence.py` does.
 
 ## Known issues found (not changed; they would change the output)
 

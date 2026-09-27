@@ -34,6 +34,9 @@ def main():
     ap.add_argument("--params", help="JSON with deformation parameter overrides (see s4/params.py)")
     ap.add_argument("--save-gif", action="store_true", help="write the notebook's progress GIFs (reference impl only)")
     ap.add_argument("--save-pickle", action="store_true", help="also pickle the deformed tet mesh like the notebook")
+    ap.add_argument("--notebook-exact", action="store_true",
+                    help="reproduce the notebook exactly, including extruding the 1 mm (un)retraction during the travel "
+                         "lift/plunge (default: retract/unretract in place)")
     a = ap.parse_args()
 
     name = os.path.splitext(os.path.basename(a.model))[0]
@@ -48,7 +51,7 @@ def main():
 
     pipeline.run(a.model, out, impl=a.impl, work_dir=a.work_dir or os.path.join(HERE, "build", name),
                  cura_config=a.cura_config, cura_overrides=overrides, cura_engine=a.cura_engine, params=params,
-                 sliced_gcode=a.sliced_gcode, save_gif=a.save_gif, save_pickle=a.save_pickle)
+                 sliced_gcode=a.sliced_gcode, save_gif=a.save_gif, save_pickle=a.save_pickle, notebook_exact=a.notebook_exact)
     print(TIMER.report(f"Stage timings: {name} ({a.impl})"))
 
 

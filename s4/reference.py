@@ -747,6 +747,7 @@ MAPPING_DEFAULTS = dict(
     RETRACTION_LENGTH=1.0,
     ROTATION_MAX_DELTA=np.deg2rad(1),
     MAX_EXTRUSION_MULTIPLIER=10,
+    SPLIT_RETRACTIONS=False,  # not in the notebook; see map_gcode
 )
 
 
@@ -920,6 +921,7 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
         RETRACTION_LENGTH = mp["RETRACTION_LENGTH"]
         ROTATION_MAX_DELTA = mp["ROTATION_MAX_DELTA"]
         MAX_EXTRUSION_MULTIPLIER = mp["MAX_EXTRUSION_MULTIPLIER"]
+        SPLIT_RETRACTIONS = mp["SPLIT_RETRACTIONS"]
         lost_vertices = []
         highest_printed_point = 0
         no_cell_positions = []
@@ -986,6 +988,19 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
             if prev_rotation is not None and not dont_smooth_rotation:
                 rotation = ROTATION_AVERAGING_ALPHA * rotation + (1 - ROTATION_AVERAGING_ALPHA) * prev_rotation
 
+            # --- not in the notebook (off by default): SPLIT_RETRACTIONS puts the +/-RETRACTION_LENGTH E value
+            # on its own zero-motion line instead of extruding it during the 1 mm travel lift/plunge
+            split = SPLIT_RETRACTIONS and extrusion is not None and (extrusion == RETRACTION_LENGTH or extrusion == -RETRACTION_LENGTH)
+            motion_extrusion = None if split else extrusion
+            if split and extrusion < 0:  # retract in place first, then lift
+                here = prev_new_position if prev_new_position is not None else new_position
+                new_gcode_points.append({
+                    "position": here.copy(), "original_position": position,
+                    "rotation": prev_rotation if prev_new_position is not None else rotation,
+                    "command": "G01", "extrusion": extrusion, "inv_time_feed": None,
+                    "extrusion_multiplier": extrusion_multiplier, "feed": gcode_point["feed"],
+                    "travelling": prev_travelling, "e_only": True})
+
             if prev_rotation is not None and prev_new_position is not None and np.abs(rotation - prev_rotation) > ROTATION_MAX_DELTA:
                 delta_rotation = rotation - prev_rotation
                 num_interpolations = int(np.abs(delta_rotation) / ROTATION_MAX_DELTA) + 1
@@ -996,7 +1011,7 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
                         "original_position": position,
                         "rotation": prev_rotation + (delta_rotation * ((i + 1) / num_interpolations)),
                         "command": prev_command,
-                        "extrusion": extrusion / num_interpolations if extrusion is not None else None,
+                        "extrusion": motion_extrusion / num_interpolations if motion_extrusion is not None else None,
                         "inv_time_feed": inv_time_feed * num_interpolations if inv_time_feed is not None else None,
                         "extrusion_multiplier": extrusion_multiplier,
                         "feed": gcode_point["feed"],
@@ -1008,12 +1023,25 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
                     "original_position": position,
                     "rotation": rotation,
                     "command": command,
-                    "extrusion": extrusion,
+                    "extrusion": motion_extrusion,
                     "inv_time_feed": inv_time_feed,
                     "extrusion_multiplier": extrusion_multiplier,
                     "feed": gcode_point["feed"],
                     "travelling": travelling
                 })
+
+            if split and extrusion > 0:  # plunge first, then unretract in place
+                if new_gcode_points[-1]["travelling"] != travelling:  # interpolated motion stayed hopped
+                    new_gcode_points.append({
+                        "position": new_position.copy(), "original_position": position, "rotation": rotation,
+                        "command": command, "extrusion": None, "inv_time_feed": None,
+                        "extrusion_multiplier": extrusion_multiplier, "feed": gcode_point["feed"],
+                        "travelling": travelling})
+                new_gcode_points.append({
+                    "position": new_position.copy(), "original_position": position, "rotation": rotation,
+                    "command": "G01", "extrusion": extrusion, "inv_time_feed": None,
+                    "extrusion_multiplier": extrusion_multiplier, "feed": gcode_point["feed"],
+                    "travelling": travelling, "e_only": True})
 
             prev_rotation = rotation
             prev_new_position = new_position.copy()
@@ -1085,7 +1113,11 @@ def write_gcode(new_gcode_points, out_path, NOZZLE_OFFSET=42):
                 string += f" E{point['extrusion']:.4f}"
 
             no_feed_value = False
-            if point["inv_time_feed"] is not None:
+            if point.get("e_only"):  # SPLIT_RETRACTIONS: zero-motion retract/unretract at the planar feed
+                string += f" F{point['feed']:g}"
+                fh.write(f"G94\n")
+                no_feed_value = True
+            elif point["inv_time_feed"] is not None:
                 string += f" F{(point['inv_time_feed']):.4f}"
             else:
                 string += f" F20000"
