@@ -31,6 +31,10 @@ MAPPING_DEFAULTS = dict(
     # False = notebook-exact. True = retract/unretract in place (E-only line at Cura's feed) instead of
     # extruding +/-RETRACTION_LENGTH during the 1 mm travel lift/plunge (which leaves filament "sticks").
     SPLIT_RETRACTIONS=False,
+    # False = notebook-exact: extrusion is scaled by each tet's volume ratio (constant per tet, so it jumps at
+    # tet boundaries). True = volume-weighted per-vertex ratio, interpolated barycentrically like position.
+    SMOOTH_EXTRUSION_MULTIPLIER=False,
+    EXTRUSION_MULTIPLIER_RANGE=None,  # e.g. (0.5, 2.0): clamp the volume-ratio multiplier
 )
 
 _WORD = re.compile(r"([A-Za-z])\s*(-?(?:\d+\.?\d*|\.\d+))")
@@ -174,8 +178,19 @@ def cell_rotations_and_squish(input_cells, input_points, input_centers, def_poin
 
     unwarped = input_points[input_cells]
     warped = def_points[input_cells]
-    z_squish = tet_volumes(*[unwarped[:, i] for i in range(4)]) / tet_volumes(*[warped[:, i] for i in range(4)])
-    return rotation, vertex_rotations, z_squish
+    vol0 = tet_volumes(*[unwarped[:, i] for i in range(4)])
+    vold = tet_volumes(*[warped[:, i] for i in range(4)])
+    z_squish = vol0 / vold
+    return rotation, vertex_rotations, z_squish, vertex_volume_ratio(input_cells, vol0, vold, len(def_points))
+
+
+def vertex_volume_ratio(cells, vol0, vold, n_points):
+    """Per-vertex volume ratio: undeformed / deformed volume of all tets touching the vertex."""
+    v0 = np.zeros(n_points)
+    vd = np.zeros(n_points)
+    np.add.at(v0, cells.ravel(), np.repeat(vol0, 4))
+    np.add.at(vd, cells.ravel(), np.repeat(vold, 4))
+    return v0 / vd
 
 
 def map_gcode(input_cells, input_points, input_centers, def_points, def_centers, find_cells, gcode_path, mp=None):
@@ -186,7 +201,7 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
     mp = {**MAPPING_DEFAULTS, **(mp or {})}
 
     with TIMER("per-cell rotations + z squish (vectorised)"):
-        _, vertex_rotations, z_squish_scales = cell_rotations_and_squish(
+        _, vertex_rotations, z_squish_scales, vertex_ratio = cell_rotations_and_squish(
             input_cells, input_points, input_centers, def_points, def_centers, mp["MAX_ROTATION"], mp["MIN_ROTATION"])
         vertex_transformations = def_points - input_points
 
@@ -213,7 +228,10 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
         transformation = np.sum(vertex_transformations[idx] * bary[:, :, None], axis=1)
         new_pos_all = P - transformation
         rot_all = np.sum(vertex_rotations[idx] * bary, axis=1)
-        squish_all = z_squish_scales[containing]
+        if mp["SMOOTH_EXTRUSION_MULTIPLIER"]:
+            squish_all = np.sum(vertex_ratio[idx] * bary, axis=1)
+        else:
+            squish_all = z_squish_scales[containing]
 
     with TIMER("sequential smoothing loop"):
         out = _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp)
@@ -232,6 +250,7 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
     MAXD = mp["ROTATION_MAX_DELTA"]
     MAXE = mp["MAX_EXTRUSION_MULTIPLIER"]
     SPLIT = mp["SPLIT_RETRACTIONS"]
+    MRANGE = mp["EXTRUSION_MULTIPLIER_RANGE"]
     lim45 = float(np.deg2rad(45))
 
     commands = g["command"]
@@ -291,6 +310,8 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
         extrusion_multiplier = 1
         if extrusion is not None and extrusion != RET and extrusion != -RET:
             extrusion_multiplier = extrusion_multiplier * squish[i]
+            if MRANGE is not None:
+                extrusion_multiplier = min(max(extrusion_multiplier, MRANGE[0]), MRANGE[1])
             extrusion = extrusion * min(extrusion_multiplier, MAXE)
         elif extrusion == -RET:
             travelling = True

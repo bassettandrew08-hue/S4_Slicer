@@ -12,12 +12,14 @@ from .params import DEFAULT_PARAMS
 
 def run(model_path, out_gcode, impl="fast", work_dir=None, cura_config="cura_config.3mf", cura_overrides=None,
         cura_engine=None, params=None, sliced_gcode=None, save_gif=False, save_pickle=False, notebook_exact=False,
-        log=print):
+        support_check=True, log=print):
     """
     impl: "fast" (default) or "reference" (the verified notebook port, slow).
     sliced_gcode: use this planar G-code instead of running CuraEngine (e.g. for A/B checks).
-    notebook_exact: keep the notebook's retract-while-lifting / unretract-while-plunging moves
-        (default False: retract/unretract in place, see SPLIT_RETRACTIONS in s4/fast_map.py).
+    notebook_exact: reproduce the notebook's mapping exactly. Default False applies the fixes: retract/unretract
+        in place (SPLIT_RETRACTIONS), smoothed + clamped (0.5x-2x) extrusion multiplier, and no start-G-code
+        prime inside the part (see S4_PIPELINE.md).
+    support_check: report extrusion that would be printed in mid-air (s4/support_check.py).
     Returns dict with paths, stats and timings.
     """
     p = dict(DEFAULT_PARAMS)
@@ -60,7 +62,12 @@ def run(model_path, out_gcode, impl="fast", work_dir=None, cura_config="cura_con
         if sliced_gcode is None:
             with TIMER("2. slice (CuraEngine)"):
                 from .cura import slice_stl
-                cura_info = slice_stl(stl_path, planar_path, cura_config, cura_overrides, cura_engine, log=log)
+                overrides = dict(cura_overrides or {})
+                if not notebook_exact and "machine_start_gcode" not in overrides:
+                    # Cura's start code primes (G1 F200 E3) at the park position, which the mapper would place
+                    # inside the part as a floating blob; the S4 header already primes at home (G1 E10).
+                    overrides["machine_start_gcode"] = "G28 ; home"
+                cura_info = slice_stl(stl_path, planar_path, cura_config, overrides, cura_engine, log=log)
         else:
             log(f"[slice] using existing planar G-code {sliced_gcode}")
         retraction = 1.0
@@ -69,7 +76,9 @@ def run(model_path, out_gcode, impl="fast", work_dir=None, cura_config="cura_con
 
         # ---- 3. map back to 4 axes
         with TIMER("3. map to 4-axis G-code"):
-            mp = {"RETRACTION_LENGTH": retraction, "SPLIT_RETRACTIONS": not notebook_exact}
+            mp = {"RETRACTION_LENGTH": retraction, "SPLIT_RETRACTIONS": not notebook_exact,
+                  "SMOOTH_EXTRUSION_MULTIPLIER": not notebook_exact,
+                  "EXTRUSION_MULTIPLIER_RANGE": None if notebook_exact else (0.5, 2.0)}
             if impl == "reference":
                 from . import reference as ref
                 pts, stats = ref.map_gcode(input_tet, deformed, planar_path, mp)
@@ -83,6 +92,14 @@ def run(model_path, out_gcode, impl="fast", work_dir=None, cura_config="cura_con
                                                 meshio_s4.make_find_cells(deformed), planar_path, mp)
                 with TIMER("write G-code"):
                     fast_map.write_gcode(pts, out_gcode)
+        if support_check:
+            with TIMER("4. support check"):
+                from . import support_check as sc
+                from .params import expand_iterations
+                support = sc.check(model_path, np.asarray(deformed.points), planar_path,
+                                   part_offset=expand_iterations(p)[0], retraction_length=retraction)
+            stats["floating_points"] = support["floating_points"]
+            log(sc.format_report(support))
     total = time.perf_counter() - t0
     log(f"[map] {stats}")
     log(f"[done] {out_gcode}  ({total:.1f} s)")

@@ -141,6 +141,37 @@ and both implementations apply it identically. `--notebook-exact` turns it off a
 byte. Note that CuraEngine itself is not deterministic: two slices of the same STL differ by about 0.01 mm on a few
 hundred lines. So compare outputs using the same planar G-code (`--sliced-gcode`), as `check_equivalence.py` does.
 
+## Fixed: blotchy extrusion multiplier (on by default)
+
+The notebook scales every segment's E by the volume ratio of the tet it falls in. That's right on average, since it
+conserves plastic when layers get stretched or squeezed, but it's constant per tet. So flow jumped wherever a path
+crossed a tet boundary: on the pi, 3,366 point-to-point jumps of more than 25%. These show up as sharp red/blue
+triangles in a plastic-per-mm view.
+
+The ratio is now computed per vertex (undeformed ÷ deformed volume of the tets around it) and interpolated
+barycentrically along the path, the same way position and rotation already are. It is then clamped to 0.5×–2×.
+On the pi: 84 jumps over 25%, 99% of points within 0.84–1.36×, total plastic within 0.2% of before. The mapper
+options are `SMOOTH_EXTRUSION_MULTIPLIER` and `EXTRUSION_MULTIPLIER_RANGE`.
+
+## Fixed: floating blob from Cura's start code (on by default)
+
+Cura's start code primes the nozzle (`G1 F200 E3`) at the park position (0, 0, 20). The mapper treats that point
+like any other, so it became a 3 mm blob placed in mid-air inside the part's volume. The headless pipeline now sets
+the start code to `G28 ; home`; the S4 header already primes at home (`G1 E10`). A `--cura-set machine_start_gcode=...`
+override still wins.
+
+`--notebook-exact` disables all three fixes (this one, the multiplier fix, and the retraction fix above).
+
+## Support check: mid-air extrusion report
+
+Every run ends with a `[support]` line (`s4/support_check.py`, skip with `--no-support-check`). It maps the planar
+toolpath into real space, walks it in print order, and counts extruded points with nothing printed earlier (and not
+the bed) within 1 mm. This is the slicer's own answer to "will this float?", independent of any simulator.
+
+On the pi with default parameters, about 0.4% of the extrusion floats: mostly infill over the bridge, printed 1.7–3.7 mm
+above the legs before they've grown tall enough. The toolpath itself stays inside the model; the deformation just
+doesn't tilt the layers enough there. Stronger or repeated deformation reduces it (see the parameter notes below).
+
 ## Known issues found (not changed; they would change the output)
 
 * **The deformation solve is quartic and unconverged.** Its residual is `||N V - R N V0||²`, which least squares then

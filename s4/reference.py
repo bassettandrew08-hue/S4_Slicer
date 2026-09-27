@@ -748,6 +748,8 @@ MAPPING_DEFAULTS = dict(
     ROTATION_MAX_DELTA=np.deg2rad(1),
     MAX_EXTRUSION_MULTIPLIER=10,
     SPLIT_RETRACTIONS=False,  # not in the notebook; see map_gcode
+    SMOOTH_EXTRUSION_MULTIPLIER=False,  # not in the notebook; see s4/fast_map.py
+    EXTRUSION_MULTIPLIER_RANGE=None,  # not in the notebook; see s4/fast_map.py
 )
 
 
@@ -892,6 +894,8 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
     with TIMER("z squish scales loop"):
         tet_rotation_matrices = calculate_rotation_matrices(input_tet, cell_rotations)
         z_squish_scales = np.full((deformed_tet.number_of_cells), np.nan)
+        cell_vol0 = np.full((deformed_tet.number_of_cells), np.nan)  # not in the notebook (smoothed multiplier)
+        cell_vold = np.full((deformed_tet.number_of_cells), np.nan)
         for cell_index, cell in enumerate(deformed_tet.field_data["cells"]):
             warped_vertices = deformed_tet.field_data["cell_vertices"][cell]
             unwarped_vertices = input_tet.field_data["cell_vertices"][cell]
@@ -899,6 +903,14 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
             unwarped_vertices_rotated = (tet_rotation_matrices[cell_index].reshape(1, 3, 3) @ unwarped_vertices.reshape(4, 3, 1)).reshape(4, 3)
 
             z_squish_scales[cell_index] = tetrahedron_volume(*unwarped_vertices) / tetrahedron_volume(*warped_vertices)
+            cell_vol0[cell_index] = tetrahedron_volume(*unwarped_vertices)
+            cell_vold[cell_index] = tetrahedron_volume(*warped_vertices)
+        # per-vertex volume ratio (same formula as fast_map.vertex_volume_ratio)
+        _v0 = np.zeros(deformed_tet.number_of_points)
+        _vd = np.zeros(deformed_tet.number_of_points)
+        np.add.at(_v0, deformed_tet.field_data["cells"].ravel(), np.repeat(cell_vol0, 4))
+        np.add.at(_vd, deformed_tet.field_data["cells"].ravel(), np.repeat(cell_vold, 4))
+        vertex_volume_ratio = _v0 / _vd
 
     with TIMER("read + segment gcode (pygcode)"):
         gcode_points = read_gcode_points(gcode_path, SEG_SIZE)
@@ -922,6 +934,9 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
         ROTATION_MAX_DELTA = mp["ROTATION_MAX_DELTA"]
         MAX_EXTRUSION_MULTIPLIER = mp["MAX_EXTRUSION_MULTIPLIER"]
         SPLIT_RETRACTIONS = mp["SPLIT_RETRACTIONS"]
+        SMOOTH_EXTRUSION_MULTIPLIER = mp["SMOOTH_EXTRUSION_MULTIPLIER"]
+        EXTRUSION_MULTIPLIER_RANGE = mp["EXTRUSION_MULTIPLIER_RANGE"]
+        last_bary = {}
         lost_vertices = []
         highest_printed_point = 0
         no_cell_positions = []
@@ -953,6 +968,7 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
 
                 rotation = np.sum(vertex_rotations[vertiex_indices] * barycentric_coordinates)
 
+                last_bary["v"] = (vertiex_indices, barycentric_coordinates)
                 return new_position, rotation
 
             dont_smooth_rotation = False
@@ -979,7 +995,13 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
 
             extrusion_multiplier = 1
             if extrusion is not None and extrusion != RETRACTION_LENGTH and extrusion != -RETRACTION_LENGTH:
-                extrusion_multiplier = extrusion_multiplier * z_squish_scales[containing_cell_index]
+                if SMOOTH_EXTRUSION_MULTIPLIER:  # not in the notebook
+                    vi, bc = last_bary["v"]
+                    extrusion_multiplier = extrusion_multiplier * np.sum(vertex_volume_ratio[vi] * bc)
+                else:
+                    extrusion_multiplier = extrusion_multiplier * z_squish_scales[containing_cell_index]
+                if EXTRUSION_MULTIPLIER_RANGE is not None:  # not in the notebook
+                    extrusion_multiplier = min(max(extrusion_multiplier, EXTRUSION_MULTIPLIER_RANGE[0]), EXTRUSION_MULTIPLIER_RANGE[1])
                 extrusion = extrusion * min(extrusion_multiplier, MAX_EXTRUSION_MULTIPLIER)
             elif extrusion == -RETRACTION_LENGTH:
                 travelling = True
