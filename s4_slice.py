@@ -64,6 +64,12 @@ def main():
         prof, source = profiles.resolve(a.model, a.params, a.sets, cura_sets, a.cura_config, a.notebook_exact)
     except (profiles.ProfileError, OSError) as e:
         sys.exit(f"error: {e}")
+    if prof["cura"]["set"] and not a.sliced_gcode:
+        from s4.cura import check_setting_names
+        try:
+            check_setting_names(profiles.cura_config_path(prof), prof["cura"]["set"], a.cura_engine)
+        except (ValueError, OSError) as e:
+            sys.exit(f"error: {e}")
 
     if a.init_params is not None:
         path = a.init_params or profiles.default_profile_path(a.model)

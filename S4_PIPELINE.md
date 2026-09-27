@@ -34,7 +34,117 @@ Use a different Cura project (save it from Cura as a project file):
 venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --cura-config my_profile.3mf
 ```
 
-## Build profiles (per-model settings)
+## Tutorial: changing settings for a run
+
+This is the 5-minute version for anyone new to the project. All commands run from the `S4_Slicer` folder, in
+PowerShell or cmd. A pi run takes about 15 s and a benchy about 2 min.
+
+There are three ways to change settings, from quickest to most permanent:
+
+| I want to... | Do this |
+|---|---|
+| try a value once | add `--set KEY=VALUE` (deform/map settings) or `--cura-set KEY=VALUE` (Cura settings) |
+| keep settings for a model | put them in `params/<model name>.json`; it's used automatically every time |
+| keep several variants of one model | put each in its own file and pick one with `--params FILE` |
+
+### Step 1: see the current settings
+
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --show-params
+```
+The first line says where the settings came from: `built-in defaults`, or the profile file that was picked up. This
+command doesn't slice anything.
+
+### Step 2: try a change once
+
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --set MAX_OVERHANG=10 --cura-set layer_height=0.1
+```
+Repeat `--set` / `--cura-set` as often as you like. Values are read as JSON, so lists work:
+`--set "PART_OFFSET=[0,10,0]"`. Nothing is saved; the next run is back to normal.
+
+### Step 3: save the settings for this model
+
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --init-params
+```
+This writes `params/pi 3mm.json` with every setting at its current value (plus any `--set` you added). Open it,
+change what you want, and **delete the lines you didn't change**, so the file shows only what's special about this
+build. For example:
+```json
+{
+  "description": "pi: gentler tilt, 0.1 mm layers",
+  "deform": {"MAX_OVERHANG": 20, "NEIGHBOUR_LOSS_WEIGHT": 50},
+  "cura":   {"set": {"layer_height": 0.1, "infill_sparse_density": 15}}
+}
+```
+From now on the plain command uses it, and the first output line confirms it:
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl"
+[params] ...\params\pi 3mm.json (matched model name)
+```
+Commit that file so the rest of the team slices the model the same way.
+
+### Step 4: keep variants side by side
+
+Copy the profile to a new name and choose it explicitly:
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --params "params/pi 3mm - fine.json" -o "output_gcode/pi fine.gcode"
+```
+Use `-o` so variants don't overwrite each other: the default output is `output_gcode/<model>.gcode`.
+
+### Step 5: repeat or share an exact run
+
+Every run saves the full settings it used to `build/<model>/params_used.json`. To reproduce a result, or to send
+someone the exact settings behind a G-code file:
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --params "build/pi 3mm/params_used.json"
+```
+
+### The settings you'll change most
+
+Deformation (`deform` section / `--set`). These control how much the part is warped into curved layers:
+
+| setting | default | what it does |
+|---|---|---|
+| `MAX_OVERHANG` | 30 | overhang angle (°) the deformation aims for. Lower = warps harder, more tilt |
+| `ROTATION_MULTIPLIER` | 2 | scales the target tilt. Higher = more tilt |
+| `NEIGHBOUR_LOSS_WEIGHT` | 30 | smoothness of the tilt field. Higher = smoother, gentler changes |
+| `SET_INITIAL_ROTATION_TO_ZERO` | false | pull areas without overhangs toward no tilt (less noisy) |
+| `PART_OFFSET` | [0, 0, 0] | shift the part on the plate, in mm. **Subtracted**: `[0, 10, 0]` moves it 10 mm toward −Y |
+| `iterations` | (none) | list of per-iteration changes, the notebook's "run cell 4 → 7 → 9 again" loop (see the benchy recipe) |
+| `ROTATION_ITERATIONS`, `DEFORMATION_ITERATIONS` | 100, 1000 | solver budgets. Changing them changes the result, not just the speed |
+
+Mapping (`map` section / `--set`). These describe the machine and shape the final 4-axis moves:
+
+| setting | default | what it does |
+|---|---|---|
+| `NOZZLE_OFFSET` | 42 | mm from the B pivot to the nozzle tip (the notebook notes 41.5 is the true value) |
+| `MIN_ROTATION`, `MAX_ROTATION` | −130, 30 | B-axis limits in degrees |
+| `ROTATION_AVERAGING_ALPHA` | 0.2 | smoothing of B along the path. Lower = smoother, slower to react |
+| `EXTRUSION_MULTIPLIER_RANGE` | [0.5, 2.0] | clamp on the extrusion compensation (`null` = no clamp) |
+| `SEG_SIZE` | 0.6 | mm; long moves are split into segments this long |
+
+Cura (`cura.set` section / `--cura-set`). Any Cura setting, by its **internal** name:
+`layer_height`, `infill_sparse_density`, `infill_pattern`, `wall_line_count`, `speed_print`,
+`material_print_temperature`, `retraction_amount`, ... The full list is in
+`C:\Program Files\UltiMaker Cura 5.13.0\share\cura\resources\definitions\fdmprinter.def.json`.
+Each run prints a `[slice]` line with the key values Cura actually used. To swap the whole base profile, set
+`"cura": {"config": "my_profile.3mf"}` (a project saved from Cura) or pass `--cura-config`.
+
+### Good to know
+
+- **Precedence**, later wins: defaults < profile file < `--set` < `--cura-set` / `--cura-config` / `--notebook-exact`.
+- **Typos are caught before anything runs**, with a suggestion:
+  `error: unknown deform setting 'MAX_OVERHNG' (did you mean MAX_OVERHANG?)`. This works for Cura names too.
+- **Angles** are in degrees for `MIN_ROTATION` / `MAX_ROTATION` / `MAX_OVERHANG`. The rotation-limit keys that the
+  notebook kept in radians can be written with a `_DEG` suffix instead: `MAX_POS_ROTATION_DEG`,
+  `MAX_NEG_ROTATION_DEG`, `ROTATION_MAX_DELTA_DEG`.
+- **Watch the `[support]` lines** at the end of each run. They report plastic printed in mid-air; islands are the
+  bad kind. They're a quick way to compare settings.
+- **`--notebook-exact`** turns off today's output fixes, to compare against old notebook results.
+
+## Build profiles: reference
 
 Every setting for a build can live in one JSON file: deformation, mapping and Cura. If `params/<model name>.json`
 exists, it is used automatically. For example, `params/pi 3mm.json` is used for `input_models/pi 3mm.stl`.

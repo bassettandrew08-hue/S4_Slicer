@@ -404,9 +404,22 @@ def _fmt(v):
     return str(v)
 
 
+def check_setting_names(proj_or_3mf, names, cura_engine=None):
+    """Raise ValueError for Cura setting names that don't exist (CuraEngine would silently ignore them)."""
+    import difflib
+    proj = proj_or_3mf if isinstance(proj_or_3mf, CuraProject) else CuraProject(proj_or_3mf, cura_engine)
+    known = set(proj.global_def.props) | set(proj.extruder_def.props)
+    for k in (names or {}):
+        if k not in known:
+            m = difflib.get_close_matches(k, known, n=1)
+            raise ValueError(f"unknown Cura setting {k!r}" + (f" (did you mean {m[0]}?)" if m else "")
+                             + ". Use Cura's internal setting name, e.g. layer_height, infill_sparse_density")
+
+
 def build_settings(threemf, overrides=None, cura_engine=None):
     """Resolve the project and apply S4-required + user overrides. Returns (project, global, extruder)."""
     proj = CuraProject(threemf, cura_engine)
+    check_setting_names(proj, overrides)
     for k, v in {**S4_REQUIRED, **(overrides or {})}.items():
         if isinstance(v, str) and k in proj.global_def.props:
             v = _parse_typed(v, proj._type(k)) if proj._type(k) not in ("str", "enum") else v
