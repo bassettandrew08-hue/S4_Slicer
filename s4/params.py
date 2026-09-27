@@ -2,11 +2,9 @@
 Deformation parameters. Defaults are the main.ipynb values that produced the verified benchy output
 (cells 2, 4, 7 as of 2026-09-25 19:00).
 
-A params JSON may be a flat dict (one deformation iteration), or
-    {"PART_OFFSET": [...], "iterations": [{...}, {...}, ...]}
-for the notebook's multi-iteration workflow (cell 4 -> cell 7 -> cell 9 "undeformed_tet = deformed_tet.copy()"
--> cell 4 ...). Like notebook variables, each iteration inherits the previous iteration's values and overrides
-only the keys it lists.
+These are the "deform" section of a build profile (s4/profile.py). An "iterations" list replays the notebook's
+multi-iteration workflow (cell 4 -> cell 7 -> cell 9 "undeformed_tet = deformed_tet.copy()" -> cell 4 ...). Like
+notebook variables, each iteration inherits the previous iteration's values and overrides only the keys it lists.
 """
 import numpy as np
 
@@ -37,8 +35,5 @@ def expand_iterations(params=None):
     cur = base
     for it in iters:
         cur = {**cur, **it}
-        for k in ("MAX_POS_ROTATION", "MAX_NEG_ROTATION"):
-            if isinstance(cur[k], str) and cur[k].startswith("deg:"):
-                cur[k] = float(np.deg2rad(float(cur[k][4:])))
         out.append(cur)
     return base["PART_OFFSET"], out

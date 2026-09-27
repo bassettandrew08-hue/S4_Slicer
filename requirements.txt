@@ -1,0 +1,17 @@
+# Python 3.14. Versions are the ones the pipeline was verified with (byte-identical output). Other versions
+# will usually work, but the deformation solve is sensitive to numerical changes (see S4_PIPELINE.md, Known limitations).
+numpy==2.5.3
+scipy==1.18.1
+pyvista==0.49.0
+vtk==9.7.0
+tetgen==0.8.4
+open3d==0.20.0
+networkx==3.6.1
+numba==0.67.0
+llvmlite==0.49.0
+pygcode==0.2.1          # reference implementation (the notebook's G-code reader)
+imageio==2.37.4         # --save-gif and the notebook's progress GIFs
+matplotlib==3.11.2      # notebook plots
+
+# For main.ipynb only:
+# jupyterlab

@@ -333,33 +333,6 @@ def initial_rotation_field(ctx, tet, p):
     return irf
 
 
-def _csr_from_rows(n_rows, n_cols, rows, cols, vals32):
-    """CSR equal to lil_matrix assignment + tocsr(): sorted columns, zeros removed."""
-    J = csr_matrix((vals32, (rows, cols)), shape=(n_rows, n_cols), dtype=np.float32)
-    J.sum_duplicates()
-    J.eliminate_zeros()
-    return J
-
-
-class CSRPattern:
-    """Fixed (row, col) pattern -> canonical CSR, built once; per call only the data is permuted.
-    Produces exactly what lil_matrix assignment + tocsr() gives (sorted columns, zeros dropped)."""
-
-    def __init__(self, n_rows, n_cols, rows, cols, matrix_cls=csr_matrix):
-        self.shape = (n_rows, n_cols)
-        self.rows, self.cols = rows, cols
-        self.order = np.lexsort((cols, rows))
-        self.indices = cols[self.order].astype(np.int32)
-        self.indptr = np.concatenate([[0], np.cumsum(np.bincount(rows, minlength=n_rows))]).astype(np.int32)
-        self.matrix_cls = matrix_cls
-
-    def build(self, vals):
-        data = vals.astype(np.float32)[self.order]
-        if not data.all():  # lil_matrix never stores explicit zeros
-            return _csr_from_rows(*self.shape, self.rows, self.cols, vals.astype(np.float32))
-        return self.matrix_cls((data, self.indices, self.indptr), shape=self.shape, copy=False)
-
-
 def optimize_rotations(ctx, tet, p, verbose=0):
     with TIMER("initial rotation field"):
         irf = initial_rotation_field(ctx, tet, p)

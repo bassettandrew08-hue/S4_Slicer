@@ -1,6 +1,17 @@
 # S4 Slicer
 A generic non-planar slicer, that can print almost any part without support.
 
+> **This fork** adds a one-command headless pipeline for the Core R-Theta printer: STL in, 4-axis G-code out,
+> with CuraEngine called directly (no Cura window). It runs about 6× faster than the notebook, with identical
+> results, and has per-model settings files.
+> **Start here: [S4_PIPELINE.md](S4_PIPELINE.md)** (setup, tutorial, settings reference).
+>
+> ```
+> venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl"
+> ```
+>
+> Upstream: [jyjblrd/S4_Slicer](https://github.com/jyjblrd/S4_Slicer). Everything below is the original README.
+
 Please use the [dicussions tab](https://github.com/jyjblrd/S4_Slicer/discussions) to ask questions and help others.
 
 [Try it now](https://colab.research.google.com/github/jyjblrd/S4_Slicer) on Google Colab! (note: colab free tier is only powerful enough to slice very simple models)
