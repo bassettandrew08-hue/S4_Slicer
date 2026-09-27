@@ -19,9 +19,8 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
   notebook byte for byte after the block.
 
 ### Notes
-- `;SETTING_3` is written exactly as Cura writes it: the JSON is escaped (`\` → `\`, newline → `
-`) before
-  it's split into 80-character comment lines. A reader has to undo that escaping before parsing the JSON, as Cura's
+- `;SETTING_3` is written exactly as Cura writes it: the JSON is escaped (each `\` becomes `\\`, each newline
+  becomes `\n`) before it's split into 80-character comment lines. A reader has to undo that escaping before parsing the JSON, as Cura's
   own G-code reader does.
 - CuraEngine's placeholder `;MINX…;MAXZ` values (`2.14748e+06`) and `;Filament used: 0m` aren't copied, since they
   aren't real measurements.
