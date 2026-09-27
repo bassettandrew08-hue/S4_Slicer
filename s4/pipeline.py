@@ -28,6 +28,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     name = os.path.splitext(os.path.basename(model_path))[0]
     work_dir = work_dir or os.path.join("build", name)
     os.makedirs(work_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(out_gcode)), exist_ok=True)
     with open(os.path.join(work_dir, "params_used.json"), "w", encoding="utf-8") as fh:
         fh.write(profiles.to_json(prof))
     stl_path = os.path.join(work_dir, f"{name}_deformed_tet.stl")

@@ -42,6 +42,10 @@ This deforms the model, slices it with CuraEngine, maps it back to 4 axes, and w
 `output_gcode/<model>.gcode`. Like the notebook, it **overwrites** an existing file with that name; use
 `-o other.gcode` to choose another. A pi takes about 15 s and a benchy about 2 min.
 
+Generated files stay out of git: the contents of `output_gcode/`, `input_gcode/`, `output_models/`, `gifs/`,
+`pickle_files/`, `build/` and `artifacts/` are ignored, so slicing never shows up as a change to commit.
+Share G-code by sending the file itself, plus its `params_used.json` (section 3, step 5).
+
 ```
 venv\Scripts\python s4_slice.py "input_models/benchy upsidedown tilted.stl" -o my_benchy.gcode
 venv\Scripts\python s4_slice.py "input_models/benchy upsidedown tilted.stl" --params params/benchy_upsidedown_tilted_recipe.json
@@ -292,5 +296,5 @@ These are on by default. `--notebook-exact` turns all of them off and reproduces
 - **The rotation smoothing is also quartic** (`W·Δ²` residuals, a `W²Δ⁴` penalty). Left unchanged.
 - **`INITIAL_ROTATION_FIELD_SMOOTHING`** does one pass for any non-zero value. The notebook's loop recomputes from the
   same field every pass; it was probably meant to be iterative.
-- **Old G-code in `input_gcode/` / `output_gcode/`** was sliced in the Cura GUI with a different profile (0.1 mm layers,
+- **Old notebook G-code** (in `input_gcode/` / `output_gcode/` on older checkouts) was sliced in the Cura GUI with a different profile (0.1 mm layers,
   6.5 mm retraction). The old benchy used absolute extrusion, which the mapper can't handle.
