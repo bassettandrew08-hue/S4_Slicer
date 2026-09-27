@@ -18,20 +18,59 @@ Choose the output file:
 venv\Scripts\python s4_slice.py "input_models/benchy upsidedown tilted.stl" -o my_benchy.gcode
 ```
 
+Change settings for one run: `--set` for deformation/mapping settings, `--cura-set` for Cura settings
+(both repeatable):
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --set MAX_OVERHANG=10 --set PART_OFFSET=[0,10,0] --cura-set layer_height=0.1
+```
+
 Run the multi-iteration benchy recipe (the notebook's cell 4 → 7 → 9 loop):
 ```
 venv\Scripts\python s4_slice.py "input_models/benchy upsidedown tilted.stl" --params params/benchy_upsidedown_tilted_recipe.json
 ```
 
-Change a Cura setting for one run (repeat `--cura-set` for more):
-```
-venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --cura-set layer_height=0.1
-```
-
-Use a different Cura profile (save it from Cura as a project file):
+Use a different Cura project (save it from Cura as a project file):
 ```
 venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --cura-config my_profile.3mf
 ```
+
+## Build profiles (per-model settings)
+
+Every setting for a build can live in one JSON file: deformation, mapping and Cura. If `params/<model name>.json`
+exists, it is used automatically. For example, `params/pi 3mm.json` is used for `input_models/pi 3mm.stl`.
+Any other file can be passed with `--params FILE`.
+
+Create a profile containing every setting at its current value, then edit it:
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --init-params
+```
+Check what a run will use, including any `--set` / `--cura-set`, without running it:
+```
+venv\Scripts\python s4_slice.py "input_models/pi 3mm.stl" --show-params
+```
+
+A profile only needs the keys you want to change:
+```json
+{
+  "description": "pi, finer layers, steeper tilt",
+  "deform": {"MAX_OVERHANG": 10, "PART_OFFSET": [0, 0, 0],
+             "iterations": [{"NEIGHBOUR_LOSS_WEIGHT": 100}, {"NEIGHBOUR_LOSS_WEIGHT": 50}]},
+  "map":    {"NOZZLE_OFFSET": 41.5, "MIN_ROTATION": -120},
+  "cura":   {"config": "cura_config.3mf", "set": {"layer_height": 0.1, "infill_sparse_density": 15}}
+}
+```
+- **deform**: the notebook's cells 2–7 settings. `iterations` replays the cell 4 → 7 → 9 loop, and each iteration
+  inherits the previous iteration's values.
+- **map**: cells 17–18 constants (segment size, B limits, nozzle offset, rotation smoothing), plus the output
+  fixes (`SPLIT_RETRACTIONS`, `SMOOTH_EXTRUSION_MULTIPLIER`, `EXTRUSION_MULTIPLIER_RANGE`).
+  `RETRACTION_LENGTH: null` means "use Cura's value".
+- **cura**: `config` (3mf project), `set` (Cura setting overrides), `strip_start_prime`.
+- **angles**: angle keys also accept degrees with a `_DEG` suffix, e.g. `MAX_POS_ROTATION_DEG: 360`.
+- **precedence**, later wins: defaults < profile < `--set` < `--cura-set` / `--cura-config` / `--notebook-exact`.
+- **typos**: misspelled keys are rejected with a suggestion (`NEIGHBOR_LOSS_WEIGHT` → did you mean `NEIGHBOUR_LOSS_WEIGHT`?).
+- **reproducing a run**: every run writes the complete settings it used to `build/<model>/params_used.json`.
+  Pass that file back with `--params` to repeat the run exactly.
+- **older files**: a flat dict or `{"iterations": [...]}` still works, and is read as the `deform` section.
 
 Check that the fast code still matches the original notebook code exactly (run this after any code change):
 ```
@@ -52,17 +91,8 @@ venv\Scripts\python s4_slice.py --help
 
 Stages (timed and printed at the end of every run, also saved to `build/<model>/timings_<impl>.json`):
 
-1. **deform**: tetgen, rotation field, deformation solve (the notebook's cells 2–11). Parameters default to
-   the `main.ipynb` values that produced the verified benchy output (`s4/params.py`: W=30, MAX_OVERHANG=30,
-   ROTATION_MULTIPLIER=2, ...). Override them with `--params my.json`, either as a flat dict or as an iteration
-   schedule that replays the notebook's "cell 4 → cell 7 → cell 9 → cell 4 ..." loop. Each iteration inherits the
-   previous iteration's values:
-   ```json
-   {"iterations": [{"NEIGHBOUR_LOSS_WEIGHT": 100, "MAX_OVERHANG": 5, "ROTATION_MULTIPLIER": 1,
-                    "SET_INITIAL_ROTATION_TO_ZERO": true},
-                   {"NEIGHBOUR_LOSS_WEIGHT": 50}]}
-   ```
-   `params/benchy_upsidedown_tilted_recipe.json` is the 5-iteration recipe from notebook cell 5.
+1. **deform**: tetgen, rotation field, deformation solve (the notebook's cells 2–11), using the build profile's
+   `deform` settings (see above).
 2. **slice**: headless CuraEngine (`s4/cura.py`), with settings taken from `cura_config.3mf`.
 3. **map**: planar G-code mapped back to the 4-axis machine (cells 15–18).
 
