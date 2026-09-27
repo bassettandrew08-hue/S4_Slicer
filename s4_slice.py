@@ -35,8 +35,8 @@ def main():
     g.add_argument("--cura-set", action="append", default=[], metavar="KEY=VALUE", help="override a Cura setting")
     g.add_argument("--cura-config", help="Cura project (.3mf) with the base profile")
     g.add_argument("--notebook-exact", action="store_true",
-                   help="reproduce the notebook exactly: turn off the retraction, extrusion-multiplier and "
-                        "start-prime fixes")
+                   help="reproduce the notebook exactly: its deformation solve, and none of the retraction, "
+                        "extrusion-multiplier or start-prime fixes")
     g.add_argument("--show-params", action="store_true", help="print the resolved settings and exit")
     g.add_argument("--init-params", nargs="?", const="", metavar="FILE",
                    help="write the resolved settings to a profile (default: params/<model>.json) and exit")

@@ -677,7 +677,11 @@ def deform(model_path, name, params, save_gif=False, verbose=2):
                 p["SET_INITIAL_ROTATION_TO_ZERO"], p["MAX_POS_ROTATION"], p["MAX_NEG_ROTATION"], verbose=verbose)
 
         with TIMER("cell 7: calculate_deformation" + tag):
-            new_vertices = calculate_deformation(undeformed_tet, rotation_field, p["DEFORMATION_ITERATIONS"], save_gif, verbose=verbose)
+            if p.get("DEFORMATION_METHOD", "island_free") == "notebook":
+                new_vertices = calculate_deformation(undeformed_tet, rotation_field, p["DEFORMATION_ITERATIONS"], save_gif, verbose=verbose)
+            else:  # not in the notebook: shared with the fast implementation (s4/island_free.py)
+                from .fast_deform import deformation_step
+                new_vertices = deformation_step(undeformed_tet, rotation_field, p, last=(it == len(iterations) - 1))
             deformed_tet = pv.UnstructuredGrid(undeformed_tet.cells, np.full(undeformed_tet.number_of_cells, pv.CellType.TETRA), new_vertices)
 
             for key in undeformed_tet.field_data.keys():

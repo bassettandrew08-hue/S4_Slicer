@@ -124,14 +124,21 @@ A run prints these lines, in order:
 | line | tells you |
 |---|---|
 | `[params]` | which profile file and overrides were used |
-| `[deform]` | mesh size and where the deformed STL went |
+| `[deform]` | the deformation's own check (inverted tets, island seeds left) and where the deformed STL went |
 | `[slice]` | the key Cura values actually used (layer height, line width, retraction, flavor, ...) |
 | `[support]` | plastic that would be printed in mid-air, by kind (see below) |
 | `[map]` | point counts from the mapping step |
 | timing table | seconds per stage |
 
-The **`[support]`** check looks for extruded points with nothing printed earlier (and not the bed) within 1 mm. It
-sorts them into runs by what their ends connect to:
+The **`[support]`** check maps the toolpath into real space and walks it in print order. Its first line is the one
+to watch: **ungrounded** extrusion, meaning plastic with no chain of support down to the bed. A point counts as
+grounded if the bed or grounded plastic from an earlier layer is within 1 mm, or if it's within 5 mm along the same
+extrusion line of such a point (normal bridging and overhang reach). Everything else is ungrounded: a floating
+island, plus every layer stacked on top of it. The largest ungrounded regions are listed with their layers and
+position.
+
+The lines after that are a finer, local view. They count points with nothing printed earlier within 1 mm, sorted by
+what the ends of each run connect to:
 
 | kind | meaning | how bad |
 |---|---|---|
@@ -183,8 +190,13 @@ Every section and key is optional; anything left out keeps its default.
 | `INITIAL_ROTATION_FIELD_SMOOTHING` | 30 | 0 = off; any other value = one smoothing pass (see section 9) |
 | `MAX_POS_ROTATION`, `MAX_NEG_ROTATION` | ±360° | clamp on the target rotation |
 | `PART_OFFSET` | [0, 0, 0] | shift the part on the plate, in mm (subtracted) |
-| `ROTATION_ITERATIONS`, `DEFORMATION_ITERATIONS` | 100, 1000 | solver budgets. Changing them changes the result, not just the speed |
+| `ROTATION_ITERATIONS`, `DEFORMATION_ITERATIONS` | 100, 1000 | solver budgets (`DEFORMATION_ITERATIONS` only applies to `notebook`). Changing them changes the result, not just the speed |
 | `iterations` | (none) | multi-iteration schedule, see above |
+| `DEFORMATION_METHOD` | `island_free` | how the tilt field becomes a deformed shape: `island_free` (section 7) or `notebook` |
+| `ISLAND_LIFT_SLOPE` | 0.5 | `island_free`: every point must be reachable from the bed rising at least this much per mm. Higher = stricter (1.0 ≈ 45° overhangs) but more distortion |
+| `ISLAND_LIFT_ROUNDS` | 5 | `island_free`: rounds of lifting |
+| `FLIP_FREE_STAGES`, `FLIP_FREE_STAGE_ITERATIONS` | 10, 150 | `island_free`: the tilt is applied in this many steps; fewer = faster but less accurate |
+| `BARRIER_WEIGHT`, `LIFT_WEIGHT` | 0.02, 5 | `island_free`: strength of the anti-fold barrier and of the lift targets |
 
 ### `map`: the machine and the final 4-axis moves (notebook cells 17–18)
 | setting | default | what it does |
@@ -245,10 +257,34 @@ same STL differ by about 0.01 mm on a few hundred lines.
 
 ## 7. How it works
 
-1. **Deform** (`s4/fast_deform.py`): tetgen, then the rotation-field and deformation least-squares solves.
+1. **Deform** (`s4/fast_deform.py`, `s4/island_free.py`): tetgen, the notebook's rotation (tilt) field, then turning
+   that field into a deformed shape.
 2. **Slice** (`s4/cura.py`): headless CuraEngine.
 3. **Map** (`s4/fast_map.py`): planar G-code mapped back to the 4-axis machine.
 4. **Support check** (`s4/support_check.py`).
+
+**Why islands happen, and the `island_free` method.** Cura slices the deformed shape flat. Any local low point of
+that shape, a spot lower than everything around it that isn't on the bed, starts printing in mid-air. The notebook
+builds the shape with a least-squares solve that stops before converging, so it misses its own target tilts by 9°
+median (26° at the 95th percentile). It also folds the mesh (202 inverted tets on the benchy) and leaves such low
+points. `island_free` keeps the notebook's tilt field but builds the shape differently:
+- **fold-free fit:** each tet is fitted to its target rotation, plus a barrier term that becomes infinite before
+  any tet can turn inside out. The tilt is applied in stages, since large rotations can't be reached in one step.
+- **lifting:** a priority-flood from the bed finds every vertex that isn't reachable from the bed by a path rising
+  at least `ISLAND_LIFT_SLOPE` per mm. Those vertices get soft height targets, and the fit is solved again. The
+  lifted regions print later, growing out from the side where they're attached instead of starting in mid-air.
+
+Results with default settings:
+
+| | notebook method | `island_free` |
+|---|---|---|
+| benchy: ungrounded extrusion in Cura's toolpath | 1,258 mm (two big islands: 624 and 239 mm) | 29 mm (largest: 17 mm of top skin) |
+| pi: ungrounded extrusion in Cura's toolpath | 18 mm | 0 mm |
+| benchy: inverted tets | 202 | 0 |
+| benchy: extrusion points needing more than 2× plastic | 3.8% | 0.4% |
+| benchy: deformation time | ~60 s | ~40 s |
+
+For comparison, Joshua's own committed pi toolpath has 17 mm of ungrounded extrusion.
 
 **Cura settings** are resolved from the 3mf the way the Cura GUI does it. Precedence is user > quality_changes >
 quality > material > definition_changes > definition, and the extruder stack falls back to the global stack.
@@ -267,6 +303,7 @@ quality > material > definition_changes > definition, and the extruder stack fal
 ## 8. Differences from the notebook
 
 These are on by default. `--notebook-exact` turns all of them off and reproduces the notebook's output byte for byte.
+The rotation (tilt) field is the notebook's in every case.
 
 | fix | notebook behaviour | now |
 |---|---|---|
@@ -274,21 +311,16 @@ These are on by default. `--notebook-exact` turns all of them off and reproduces
 | **blotchy extrusion** (`SMOOTH_EXTRUSION_MULTIPLIER`, `EXTRUSION_MULTIPLIER_RANGE`) | The volume-compensation factor was constant per tetrahedron, so flow jumped at every tet boundary. On the pi there were 3,366 jumps of more than 25%. | Per-vertex factor blended smoothly along the path and clamped to 0.5×–2×: 84 jumps over 25%, total plastic within 0.2%. |
 | **start-code blob** (`strip_start_prime`) | Cura's prime (`G1 F200 E3` at z = 20) was mapped into the part as a floating 3 mm blob. | Start code set to `G28 ; home`; the S4 header already primes at home. |
 | **`NOZZLE_OFFSET`** | hard-coded 42 in the writer | taken from the profile |
+| **deformation** (`DEFORMATION_METHOD`) | unconverged least-squares solve: folds the mesh, leaves floating islands | `island_free` (section 7) |
 
 ## 9. Known limitations
 
-- **Some plastic still prints in mid-air over flat bridges.** The deformation can't make a flat underside spanning a
-  gap fully printable. The pi's crossbar is at z = 10 mm over an 11 mm gap, and its underside gets printed before the
-  legs reach it. S4 is still far better than flat printing:
-
-  | | pi | benchy |
-  |---|---|---|
-  | floating overall (flat print → S4) | 2.2% → 0.42% | 0.63% → 0.51% |
-  | islands | 3 runs, 4 mm | 25 runs, 21 mm |
-
-  Tuning the settings moved the pi between 0.18% and 0.77%, never to zero, and the best settings push B to its −130°
-  limit. Fixing it properly means changing the rotation-field maths, which hasn't been done.
-- **The deformation solve is quartic and unconverged.** Its residual `||N V − R N V0||²` gets squared again by least
+- **A little ungrounded plastic remains** (benchy: about 30–50 mm, mostly top skin and infill at the top of the hull;
+  that's skin laid over sparse infill, which is normal bridging). Raising `ISLAND_LIFT_SLOPE` is stricter but distorts
+  the part more.
+- **`island_free` changes the shape Cura slices**, so its output differs from the notebook's (by design). Vertex
+  positions are deterministic run to run.
+- **The notebook's deformation solve (`DEFORMATION_METHOD: notebook`) is quartic and unconverged.** Its residual `||N V − R N V0||²` gets squared again by least
   squares, and the solve stops at 1000 evaluations. That makes it chaotic: nudging the start point by 1e-9 mm moves
   vertices by up to 0.6 mm. So results can only be reproduced bit-for-bit, and they can differ slightly across
   machines or BLAS thread counts. An exact linear solve would take 0.2 s, but it would move benchy vertices by up to

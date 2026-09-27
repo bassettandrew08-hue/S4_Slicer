@@ -11,6 +11,8 @@ from collections import Counter
 
 import numpy as np
 from scipy.spatial import cKDTree
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 
 from . import fast_map, meshio_s4
 
@@ -47,8 +49,9 @@ def _planar_layers(planar_path, seg_size):
 
 
 def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), radius=1.0, seg_size=0.6,
-          retraction_length=1.0):
-    inp = meshio_s4.load_and_tetrahedralize(model_path, part_offset)
+          retraction_length=1.0, input_grid=None):
+    """input_grid: undeformed tet mesh to use instead of re-running tetgen on model_path."""
+    inp = input_grid if input_grid is not None else meshio_s4.load_and_tetrahedralize(model_path, part_offset)
     cells = meshio_s4.cells_of(inp)
     P0 = np.asarray(inp.points)
     Pd = np.asarray(deformed_points)
@@ -69,6 +72,28 @@ def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), ra
     ext = np.array([e is not None and e > 0 and abs(e) != retraction_length for e in g["extrusion"]])
     ext &= ~(bary.sum(axis=1) > 1.01)  # the mapper drops these
 
+    surf = inp.extract_surface(algorithm="dataset_surface")
+    inside = np.asarray(inp.find_containing_cell(real[ext])) >= 0
+    _, cp = surf.find_closest_cell(real[ext], return_closest_point=True)
+    outside_mm = np.where(inside, 0.0, np.linalg.norm(real[ext] - cp, axis=1))
+    r = analyse(real, ext, layer, types, radius)
+    r["outside_part_points"] = int((outside_mm > 0.5).sum())
+    return r
+
+
+def check_planar(planar_path, radius=1.0, seg_size=0.6, retraction_length=1.0):
+    """Same check on Cura's planar toolpath in the deformed shape (no mapping). Islands are born here."""
+    g = fast_map.read_gcode_points(planar_path, seg_size)
+    layer, types = _planar_layers(planar_path, seg_size)
+    ext = np.array([e is not None and e > 0 and abs(e) != retraction_length for e in g["extrusion"]])
+    r = analyse(g["position"], ext, layer, types, radius)
+    r["outside_part_points"] = 0
+    return r
+
+
+def analyse(real, ext, layer, types, radius):
+    """Print-order support analysis of an extrusion path (points `real`, in print order)."""
+    P = real
     # supported = the bed is within radius, or some point from an earlier planar layer is
     ei = np.nonzero(ext)[0]
     Q = real[ei]
@@ -87,12 +112,8 @@ def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), ra
         g = np.min(np.linalg.norm(earlier - Q[k], axis=1)) if len(earlier) else np.inf
         gap[ei[k]] = min(g, Q[k, 2])
 
-    surf = inp.extract_surface(algorithm="dataset_surface")
-    inside = np.asarray(inp.find_containing_cell(real[ext])) >= 0
-    _, cp = surf.find_closest_cell(real[ext], return_closest_point=True)
-    outside_mm = np.where(inside, 0.0, np.linalg.norm(real[ext] - cp, axis=1))
-
     fl = np.nonzero(floating)[0]
+    ug_mm, regions = grounded_regions(real, ext, layer, types, radius)
 
     # Group floating points into runs along the toolpath and classify them by what the ends connect to:
     #   bridge     - supported extrusion on both ends (normal FDM bridging; sparse gyroid does this even in flat prints)
@@ -111,6 +132,8 @@ def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), ra
         classes[k][2].update(types[i] for i in r)
 
     return {
+        "ungrounded_mm": ug_mm,
+        "regions": regions,
         "runs": {k: {"count": v[0], "length_mm": v[1], "types": v[2].most_common()} for k, v in classes.items()},
         "extruding_points": int(ext.sum()),
         "floating_points": int(len(fl)),
@@ -119,12 +142,69 @@ def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), ra
         "floating_gap_mm": (float(np.median(gap[fl])), float(gap[fl].max())) if len(fl) else (0.0, 0.0),
         "floating_layers": (int(layer[fl].min()), int(layer[fl].max())) if len(fl) else None,
         "floating_real_z": (float(real[fl, 2].min()), float(real[fl, 2].max())) if len(fl) else None,
-        "outside_part_points": int((outside_mm > 0.5).sum()),
         "radius_mm": radius,
     }
 
 
+def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
+    """Extrusion with no chain of support down to the bed.
+
+    A point is grounded if the bed is within R, if a grounded point from an EARLIER layer is within R, or if it
+    lies on the same extrusion run within `reach` mm of such a point (bridging / overhang reach). Everything else is
+    ungrounded: material printed in mid-air, plus anything later stacked on top of it. Ungrounded points are grouped
+    into regions (connected within R). Returns (total ungrounded mm, regions sorted by size)."""
+    ei = np.nonzero(ext & (layer >= 0))[0]
+    if len(ei) == 0:
+        return 0.0, []
+    Q = P[ei]; Ly = layer[ei]; n = len(ei)
+    pairs = cKDTree(Q).query_pairs(R, output_type="ndarray")
+    a, b = pairs[:, 0], pairs[:, 1]
+    fwd = Ly[a] > Ly[b]; bwd = Ly[b] > Ly[a]
+    A = csr_matrix((np.ones(int(fwd.sum() + bwd.sum()), np.int8), (np.r_[a[fwd], b[bwd]], np.r_[b[fwd], a[bwd]])), shape=(n, n))
+    run_id = np.cumsum(np.r_[1, (np.diff(ei) != 1) | (np.diff(Ly) != 0)])
+    seg = np.r_[0, np.linalg.norm(np.diff(Q, axis=0), axis=1)] * (np.r_[0, np.diff(run_id)] == 0)
+    s_along = np.cumsum(seg)
+    g = np.zeros(n, bool)
+    order = np.argsort(Ly, kind="stable")
+    bounds = np.r_[0, np.cumsum(np.bincount(Ly - Ly.min()))]
+    for k in range(len(bounds) - 1):
+        idx = order[bounds[k]:bounds[k + 1]]
+        if len(idx) == 0:
+            continue
+        direct = (Q[idx, 2] < R) | (np.asarray(A[idx] @ g.astype(np.int8)).ravel() > 0)
+        gl = direct.copy()
+        rid = run_id[idx]; sa = s_along[idx]
+        for r in np.unique(rid[direct]):
+            m = rid == r
+            dist = np.min(np.abs(sa[m][:, None] - sa[m & direct][None, :]), axis=1)
+            gl[np.nonzero(m)[0]] |= dist <= reach
+        g[idx] = gl
+    ug = ~g
+    keep = ug[a] & ug[b]
+    C = csr_matrix((np.ones(int(keep.sum())), (a[keep], b[keep])), shape=(n, n))
+    _, lab = connected_components(C, directed=False)
+    regions = []
+    for c in np.unique(lab[ug]):
+        m = ug & (lab == c)
+        L = Ly[m]
+        regions.append({"mm": float(m.sum() * seg_mm), "layers": (int(L.min()), int(L.max())),
+                        "centre": [round(float(v), 1) for v in Q[m].mean(0)],
+                        "types": Counter(types[i] for i in ei[m]).most_common(2)})
+    regions.sort(key=lambda r: -r["mm"])
+    return float(ug.sum() * seg_mm), regions
+
+
 def format_report(r):
+    regs = r.get("regions", [])
+    s = f"[support] ungrounded (no support chain to the bed): ~{r.get('ungrounded_mm', 0):.0f} mm of extrusion in {len(regs)} regions"
+    for g in regs[:3]:
+        s += (f"\n[support]   ~{g['mm']:.0f} mm, layers {g['layers'][0]}-{g['layers'][1]}, at {g['centre']}, "
+              f"{', '.join(f'{t} {n}' for t, n in g['types'])}")
+    s += "\n" + _format_local(r)
+    return s
+
+
+def _format_local(r):
     s = (f"[support] {r['floating_points']} of {r['extruding_points']} extruded points ({r['floating_pct']:.2f}%) "
          f"are more than {r['radius_mm']} mm from anything printed earlier")
     if r["floating_points"]:

@@ -427,6 +427,19 @@ def next_iteration_mesh(ctx, prev_tet, new_vertices):
     return t
 
 
+def deformation_step(tet, rf, p, last=True, verbose=0, log=print):
+    """Rotation field -> deformed vertices, with the method chosen in the profile."""
+    method = p.get("DEFORMATION_METHOD", "island_free")
+    if method == "notebook":
+        return calculate_deformation(tet, rf, p["DEFORMATION_ITERATIONS"], verbose)
+    if method == "island_free":
+        from . import island_free
+        nv, _ = island_free.deform(tet.points, tet.field_data["cells"], np.asarray(tet.cell_data["cell_center"]),
+                                   rf, p, lift=last, log=log)
+        return nv
+    raise ValueError(f"unknown DEFORMATION_METHOD {method!r} (use 'island_free' or 'notebook')")
+
+
 def deform(model_path, params=None, verbose=0):
     """Cells 2, (4, 7, [9]) per iteration, 11. Returns (ctx, deformed_grid_with_offset_applied, rotation_field)."""
     from .params import expand_iterations
@@ -439,7 +452,7 @@ def deform(model_path, params=None, verbose=0):
         with TIMER("optimize_rotations" + tag):
             rf = optimize_rotations(ctx, tet, p, verbose)
         with TIMER("calculate_deformation" + tag):
-            nv = calculate_deformation(tet, rf, p["DEFORMATION_ITERATIONS"], verbose)
+            nv = deformation_step(tet, rf, p, last=(it == len(iterations) - 1), verbose=verbose)
         if it < len(iterations) - 1:
             with TIMER("attributes for next iteration"):
                 tet = next_iteration_mesh(ctx, tet, nv)

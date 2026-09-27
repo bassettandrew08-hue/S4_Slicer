@@ -45,7 +45,8 @@ CURA_DEFAULTS = dict(
     set={},                         # Cura setting overrides, e.g. {"layer_height": 0.1}
     strip_start_prime=True,         # drop Cura's start-code prime (it would land inside the part)
 )
-NOTEBOOK_EXACT = {"map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False,
+NOTEBOOK_EXACT = {"deform": {"DEFORMATION_METHOD": "notebook"},
+                  "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False,
                           "EXTRUSION_MULTIPLIER_RANGE": None},
                   "cura": {"strip_start_prime": False}}
 DEG_KEYS = {"MAX_POS_ROTATION", "MAX_NEG_ROTATION", "ROTATION_MAX_DELTA"}

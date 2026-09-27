@@ -20,6 +20,16 @@ DEFAULT_PARAMS = dict(
     ROTATION_ITERATIONS=100,
     DEFORMATION_ITERATIONS=1000,
     STEEP_OVERHANG_COMPENSATION=True,
+    # How the rotation field becomes a deformed mesh:
+    #   "island_free" (default): fold-free fit + lifting of height minima that would print as floating islands
+    #   "notebook": the notebook's least-squares solve (reproduces main.ipynb; folds and leaves islands)
+    DEFORMATION_METHOD="island_free",
+    ISLAND_LIFT_SLOPE=0.5,         # island_free: minimum rise per mm from the bed (0.5 ~ 63 deg overhang)
+    ISLAND_LIFT_ROUNDS=5,
+    LIFT_WEIGHT=5.0,
+    BARRIER_WEIGHT=0.02,
+    FLIP_FREE_STAGES=10,
+    FLIP_FREE_STAGE_ITERATIONS=150,
 )
 
 
