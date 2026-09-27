@@ -1,8 +1,9 @@
 # S4 headless pipeline
 
 One command, STL in, 4-axis G-code out, for the Core R-Theta printer. The output uses C/X/Z/B/E moves, `G93`
-inverse-time feed and `M83` relative E. It runs the same maths as `main.ipynb`, calls CuraEngine directly (no Cura
-window), and is about 6× faster.
+inverse-time feed and `M83` relative E. It's built on `main.ipynb`, calls CuraEngine directly (no Cura window), and
+by default uses a deformation that avoids floating islands. What changed and why, with measurements, is in
+[CHANGELOG.md](CHANGELOG.md).
 
 **Contents**
 1. [Setup](#1-setup-once-per-computer) (once per computer)
@@ -146,8 +147,7 @@ what the ends of each run connect to:
 | **cantilever** | anchored at one end | risky if long |
 | **bridge** | anchored at both ends | normal FDM bridging |
 
-Some bridging is normal. Sparse gyroid infill does it even in a flat print: a plain 30 mm cube shows 1.3%
-"floating" infill with this check. Skip the check with `--no-support-check`.
+Some bridging is normal: sparse gyroid infill does it even in a flat print. Skip the check with `--no-support-check`.
 
 Files in `build/<model>/`:
 
@@ -252,8 +252,8 @@ venv\Scripts\python tools\run_reference.py map --model M.stl --out DIR --sliced 
 - `--notebook-exact` reproduces old notebook results.
 - `run_reference.py` maps a notebook pickle.
 
-**Compare runs using the same planar G-code** (`--sliced-gcode`). CuraEngine isn't deterministic: two slices of the
-same STL differ by about 0.01 mm on a few hundred lines.
+**Compare runs using the same planar G-code** (`--sliced-gcode`), because CuraEngine isn't deterministic. After a
+change that affects output, add an entry to [CHANGELOG.md](CHANGELOG.md).
 
 ## 7. How it works
 
@@ -263,55 +263,41 @@ same STL differ by about 0.01 mm on a few hundred lines.
 3. **Map** (`s4/fast_map.py`): planar G-code mapped back to the 4-axis machine.
 4. **Support check** (`s4/support_check.py`).
 
-**Why islands happen, and the `island_free` method.** Cura slices the deformed shape flat. Any local low point of
-that shape, a spot lower than everything around it that isn't on the bed, starts printing in mid-air. The notebook
-builds the shape with a least-squares solve that stops before converging, so it misses its own target tilts by 9°
-median (26° at the 95th percentile). It also folds the mesh (202 inverted tets on the benchy) and leaves such low
-points. `island_free` keeps the notebook's tilt field but builds the shape differently:
-- **fold-free fit:** each tet is fitted to its target rotation, plus a barrier term that becomes infinite before
-  any tet can turn inside out. The tilt is applied in stages, since large rotations can't be reached in one step.
-- **lifting:** a priority-flood from the bed finds every vertex that isn't reachable from the bed by a path rising
-  at least `ISLAND_LIFT_SLOPE` per mm. Those vertices get soft height targets, and the fit is solved again. The
-  lifted regions print later, growing out from the side where they're attached instead of starting in mid-air.
+**The deformation (`island_free`, default).** Cura slices the deformed shape flat. Any local low point of that shape,
+a spot lower than everything around it that isn't on the bed, starts printing in mid-air. `island_free` keeps the
+notebook's tilt field but builds the shape in two steps:
+- **fold-free fit:** each tet is fitted to its target rotation, plus a barrier term that stops any tet turning inside
+  out. The tilt is applied in stages (`FLIP_FREE_STAGES`).
+- **lifting:** vertices that can't be reached from the bed by a path rising at least `ISLAND_LIFT_SLOPE` per mm get
+  height targets, and the fit is solved again. Those regions then print later, growing out from where they're
+  attached.
 
-Results with default settings:
-
-| | notebook method | `island_free` |
-|---|---|---|
-| benchy: ungrounded extrusion in Cura's toolpath | 1,258 mm (two big islands: 624 and 239 mm) | 29 mm (largest: 17 mm of top skin) |
-| pi: ungrounded extrusion in Cura's toolpath | 18 mm | 0 mm |
-| benchy: inverted tets | 202 | 0 |
-| benchy: extrusion points needing more than 2× plastic | 3.8% | 0.4% |
-| benchy: deformation time | ~60 s | ~40 s |
-
-For comparison, Joshua's own committed pi toolpath has 17 mm of ungrounded extrusion.
+`DEFORMATION_METHOD: notebook` uses the notebook's own least-squares solve instead. Before/after numbers are in
+the [changelog](CHANGELOG.md#2026-09-27-island-free-deformation).
 
 **Cura settings** are resolved from the 3mf the way the Cura GUI does it. Precedence is user > quality_changes >
 quality > material > definition_changes > definition, and the extruder stack falls back to the global stack.
 `=expressions`, `resolve` and `limit_to_extruder` are handled too. The result goes to CuraEngine as a generated
 `.def.json`, because about 700 `-s` flags would exceed the Windows command-line limit.
 
-**The fast path** gives exactly the reference's output. Its main changes, none of which alter the result:
-- neighbour lists are rebuilt with numpy, but in VTK's exact order
-- one Dijkstra instead of three identical ones
-- one smoothing pass instead of 30 identical ones
-- Jacobians built straight into CSR
-- a row-parallel numba mat-vec inside scipy's TRF solver, with the same summation order
-- batched LAPACK for the per-cell and per-point maths
-- a regex G-code reader
+**Two implementations.** `--impl fast` (default) and `--impl reference`, a line-for-line port of the notebook, give
+byte-identical output (section 6). The speed-ups in the fast one are listed in the
+[changelog](CHANGELOG.md#2026-09-25-headless-pipeline).
 
 ## 8. Differences from the notebook
 
 These are on by default. `--notebook-exact` turns all of them off and reproduces the notebook's output byte for byte.
 The rotation (tilt) field is the notebook's in every case.
 
-| fix | notebook behaviour | now |
+| what | setting | difference |
 |---|---|---|
-| **retraction "sticks"** (`SPLIT_RETRACTIONS`) | Each 1 mm unretract was a 1 mm plunge while extruding, and each retract a lift while retracting, at F20000. This left filament sticks at almost every travel (about 940 on the pi). | Retract in place, lift, travel, lower, unretract in place, at Cura's retraction speed (F3600). |
-| **blotchy extrusion** (`SMOOTH_EXTRUSION_MULTIPLIER`, `EXTRUSION_MULTIPLIER_RANGE`) | The volume-compensation factor was constant per tetrahedron, so flow jumped at every tet boundary. On the pi there were 3,366 jumps of more than 25%. | Per-vertex factor blended smoothly along the path and clamped to 0.5×–2×: 84 jumps over 25%, total plastic within 0.2%. |
-| **start-code blob** (`strip_start_prime`) | Cura's prime (`G1 F200 E3` at z = 20) was mapped into the part as a floating 3 mm blob. | Start code set to `G28 ; home`; the S4 header already primes at home. |
-| **`NOZZLE_OFFSET`** | hard-coded 42 in the writer | taken from the profile |
-| **deformation** (`DEFORMATION_METHOD`) | unconverged least-squares solve: folds the mesh, leaves floating islands | `island_free` (section 7) |
+| deformation | `DEFORMATION_METHOD` | fold-free, island-free shape instead of the notebook's unconverged solve |
+| retractions | `SPLIT_RETRACTIONS` | retract/unretract in place, at Cura's retraction speed (the notebook extruded during a 1 mm plunge, leaving "sticks") |
+| extrusion compensation | `SMOOTH_EXTRUSION_MULTIPLIER`, `EXTRUSION_MULTIPLIER_RANGE` | blended smoothly along the path and clamped to 0.5×–2× (was constant per tet, so flow jumped) |
+| start code | `strip_start_prime` | Cura's prime is dropped (it became a floating blob inside the part) |
+| nozzle offset | `NOZZLE_OFFSET` | taken from the profile (was hard-coded to 42) |
+
+Why each of these was needed, with measurements, is in the [changelog](CHANGELOG.md).
 
 ## 9. Known limitations
 
@@ -320,13 +306,11 @@ The rotation (tilt) field is the notebook's in every case.
   the part more.
 - **`island_free` changes the shape Cura slices**, so its output differs from the notebook's (by design). Vertex
   positions are deterministic run to run.
-- **The notebook's deformation solve (`DEFORMATION_METHOD: notebook`) is quartic and unconverged.** Its residual `||N V − R N V0||²` gets squared again by least
-  squares, and the solve stops at 1000 evaluations. That makes it chaotic: nudging the start point by 1e-9 mm moves
-  vertices by up to 0.6 mm. So results can only be reproduced bit-for-bit, and they can differ slightly across
-  machines or BLAS thread counts. An exact linear solve would take 0.2 s, but it would move benchy vertices by up to
-  13 mm; not adopted.
-- **The rotation smoothing is also quartic** (`W·Δ²` residuals, a `W²Δ⁴` penalty). Left unchanged.
+- **The notebook's deformation solve** (`DEFORMATION_METHOD: notebook`) is unconverged and chaotic. Its results can
+  only be reproduced bit-for-bit, and can differ slightly across machines or BLAS thread counts.
+- **The rotation smoothing is quartic** (`W·Δ²` residuals, a `W²Δ⁴` penalty). Left unchanged.
 - **`INITIAL_ROTATION_FIELD_SMOOTHING`** does one pass for any non-zero value. The notebook's loop recomputes from the
   same field every pass; it was probably meant to be iterative.
-- **Old notebook G-code** (in `input_gcode/` / `output_gcode/` on older checkouts) was sliced in the Cura GUI with a different profile (0.1 mm layers,
-  6.5 mm retraction). The old benchy used absolute extrusion, which the mapper can't handle.
+- **Cura GUI slices need relative extrusion** (M83). The mapper treats every E value as relative, so a slice made with
+  absolute extrusion (M82) comes out badly over-extruded. Headless slicing always uses relative.
+- **CuraEngine isn't deterministic:** compare runs on the same planar G-code (`--sliced-gcode`).
