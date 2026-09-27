@@ -93,7 +93,25 @@ def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), ra
     outside_mm = np.where(inside, 0.0, np.linalg.norm(real[ext] - cp, axis=1))
 
     fl = np.nonzero(floating)[0]
+
+    # Group floating points into runs along the toolpath and classify them by what the ends connect to:
+    #   bridge     - supported extrusion on both ends (normal FDM bridging; sparse gyroid does this even in flat prints)
+    #   cantilever - supported on one end only
+    #   island     - not connected to supported extrusion at all: this plastic has nothing to stick to
+    def supported(i):
+        return 0 <= i < len(P) and ext[i] and not floating[i]
+    runs = np.split(fl, np.nonzero(np.diff(fl) > 1)[0] + 1) if len(fl) else []
+    classes = {"bridge": [0, 0.0, Counter()], "cantilever": [0, 0.0, Counter()], "island": [0, 0.0, Counter()]}
+    for r in runs:
+        a, b = supported(r[0] - 1), supported(r[-1] + 1)
+        k = "bridge" if a and b else ("cantilever" if a or b else "island")
+        chain = np.r_[r[0] - 1, r] if r[0] > 0 else r
+        classes[k][0] += 1
+        classes[k][1] += float(np.sum(np.linalg.norm(np.diff(real[chain], axis=0), axis=1)))
+        classes[k][2].update(types[i] for i in r)
+
     return {
+        "runs": {k: {"count": v[0], "length_mm": v[1], "types": v[2].most_common()} for k, v in classes.items()},
         "extruding_points": int(ext.sum()),
         "floating_points": int(len(fl)),
         "floating_pct": 100.0 * len(fl) / max(int(ext.sum()), 1),
@@ -110,9 +128,16 @@ def format_report(r):
     s = (f"[support] {r['floating_points']} of {r['extruding_points']} extruded points ({r['floating_pct']:.2f}%) "
          f"are more than {r['radius_mm']} mm from anything printed earlier")
     if r["floating_points"]:
-        s += (f"; gap median {r['floating_gap_mm'][0]:.1f} mm, max {r['floating_gap_mm'][1]:.1f} mm; "
-              f"real z {r['floating_real_z'][0]:.1f}-{r['floating_real_z'][1]:.1f} mm; "
-              f"types {dict(r['floating_types'][:4])}")
+        s += (f" (real z {r['floating_real_z'][0]:.1f}-{r['floating_real_z'][1]:.1f} mm, "
+              f"gap up to {r['floating_gap_mm'][1]:.1f} mm):")
+        notes = {"bridge": "anchored both ends, normal bridging",
+                 "cantilever": "anchored one end",
+                 "island": "UNANCHORED, nothing to stick to"}
+        for k in ("island", "cantilever", "bridge"):
+            v = r["runs"][k]
+            if v["count"]:
+                s += (f"\n[support]   {k:10s} {v['count']:4d} runs, {v['length_mm']:6.1f} mm "
+                      f"({notes[k]}; {', '.join(f'{t} {n}' for t, n in v['types'][:3])})")
     if r["outside_part_points"]:
-        s += f"; {r['outside_part_points']} points map >0.5 mm outside the model"
+        s += f"\n[support]   {r['outside_part_points']} points map >0.5 mm outside the model"
     return s

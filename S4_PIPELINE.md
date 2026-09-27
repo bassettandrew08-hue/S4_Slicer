@@ -168,9 +168,26 @@ Every run ends with a `[support]` line (`s4/support_check.py`, skip with `--no-s
 toolpath into real space, walks it in print order, and counts extruded points with nothing printed earlier (and not
 the bed) within 1 mm. This is the slicer's own answer to "will this float?", independent of any simulator.
 
-On the pi with default parameters, about 0.4% of the extrusion floats: mostly infill over the bridge, printed 1.7–3.7 mm
-above the legs before they've grown tall enough. The toolpath itself stays inside the model; the deformation just
-doesn't tilt the layers enough there. Stronger or repeated deformation reduces it (see the parameter notes below).
+Floating runs are classified by what their ends connect to:
+- **bridge**: supported extrusion at both ends. This is normal FDM bridging. Sparse gyroid infill does it even in
+  a flat print: a plain 30 mm cube shows 1.3% "floating" infill with this 1 mm radius.
+- **cantilever**: supported at one end only.
+- **island**: connected to nothing. This is the only truly unprintable case.
+
+Measured with default parameters:
+
+| | pi | benchy |
+|---|---|---|
+| floating overall (flat print → S4) | 2.2% → 0.42% | 0.63% → 0.51% |
+| islands | 3 runs, 4 mm (outer wall) | 25 runs, 21 mm |
+| cantilevers | 9 runs, 31 mm | 37 runs, 106 mm |
+| bridges | 49 runs, 193 mm, mostly infill | 189 runs, 488 mm |
+
+The mapping is faithful: Cura's planar toolpath already floats in the *deformed* shape, because the deformation
+doesn't make a flat 180° bridge underside (the pi's crossbar, z = 10 mm over an 11 mm gap) fully printable. So the
+crossbar underside gets printed while the legs are still short of it. Tuning (MAX_OVERHANG, multiplier, weight,
+iterations, part offset) moved the pi between 0.18% and 0.77%. None of it reached zero, and the best settings
+drive B to its −130° limit.
 
 ## Known issues found (not changed; they would change the output)
 
