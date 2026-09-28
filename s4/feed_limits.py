@@ -23,7 +23,8 @@ def _fmt_f(f):
 
 
 def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
-    """Rewrite the feeds in path in place. Speeds in deg/s (C, B) and mm/s (X, Z). Returns a summary dict."""
+    """Rewrite the feeds in path in place. Speeds in deg/s (C, B) and mm/s (X, Z). Returns the share of moves slowed.
+    The print-time estimate is s4/print_time.py (it also counts acceleration, like R-Theta Sim)."""
     with open(path) as fh:
         lines = fh.read().split("\n")
     lim = {"C": max_c * 60.0, "B": max_b * 60.0, "X": max_x * 60.0, "Z": max_z * 60.0}  # per minute
@@ -31,7 +32,6 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
     out = []
     mode = 94
     started = False
-    total_min = 0.0
     slowed = 0
     moves = 0
     i = 0
@@ -51,7 +51,7 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
                 if any(new[k] != pos[k] for k in pos):
                     t = _move_time(pos, new, None, 20000.0, lim, nozzle_offset)
                     out.append(lines[i + 1].rstrip()[:-len(" F20000")] + " F" + _fmt_f(1.0 / t))
-                    pos = new; total_min += t; moves += 1; slowed += 1
+                    pos = new; moves += 1; slowed += 1
                     mode = 93  # the triple's closing G93 is consumed here
                     i += 3
                     continue
@@ -66,7 +66,7 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
             if mode == 93 and "F" in w and any(new[k] != pos[k] for k in pos):
                 t0 = 1.0 / float(w["F"])
                 t = _move_time(pos, new, t0, None, lim, nozzle_offset)
-                moves += 1; total_min += t
+                moves += 1
                 if t > t0 * (1 + 1e-9):
                     slowed += 1
                     line = re.sub(r" F-?[\d.eE+-]+", " F" + _fmt_f(1.0 / t), line.rstrip())
@@ -75,8 +75,7 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
         i += 1
     with open(path, "w") as fh:
         fh.write("\n".join(out))
-    return {"moves_slowed_pct": round(100.0 * slowed / max(moves, 1), 1),
-            "estimated_print_time_min": round(total_min, 1)}
+    return {"moves_slowed_pct": round(100.0 * slowed / max(moves, 1), 1)}
 
 
 def _tip(p, L):

@@ -47,6 +47,17 @@ MAP_DEFAULTS = dict(
     MAX_SPEED_B=180,                # deg/s, nozzle tilt
     MAX_SPEED_X=150,                # mm/s, radial
     MAX_SPEED_Z=50,                 # mm/s
+    # the rest of the machine, for the print-time estimate (s4/print_time.py, the same planner as R-Theta Sim).
+    # Placeholders equal to the sim's defaults, so both give the same time
+    MAX_SPEED_E=60,                 # mm/s of filament
+    MAX_ACCEL_X=2000,               # mm/s²
+    MAX_ACCEL_Z=200,                # mm/s²
+    MAX_ACCEL_B=5000,               # deg/s²
+    MAX_ACCEL_C=3000,               # deg/s²
+    MAX_ACCEL_E=3000,               # mm/s²
+    CORNER_SPEED=8,                 # the sim's "corner speed floor" (like jerk)
+    HOME_X=140, HOME_Z=200, HOME_B=0,  # where G28 goes
+    HOME_SPEED=40,                  # mm/s
 )
 CURA_DEFAULTS = dict(
     config="cura_config.3mf",       # Cura project with the base profile (relative to the repo folder)

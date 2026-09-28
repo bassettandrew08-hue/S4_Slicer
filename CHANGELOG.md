@@ -6,6 +6,50 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
 
 ---
 
+## 2026-09-28: R-Theta Sim in the repo, print times in sync
+
+### Added
+- **R-Theta Sim** is now in the repo: `sim/r-theta-simulator.html` (single file; open it in a browser).
+- **The sim's print time and the pipeline's estimate now agree.** Before, the sim showed 2.2× to 3.4× the
+  pipeline's number, and the ratio changed from model to model. Two things differed:
+  - the machine limits: the sim's placeholder Z speed was 12 mm/s against the pipeline's 50, which hit Z-heavy
+    models like the benchy hardest
+  - the time model: the sim plans acceleration and corners; the pipeline added up per-move times
+
+  The pipeline now estimates with a line-by-line port of the sim's parser and planner (`s4/print_time.py`), and
+  both use the same machine defaults. `tools/check_print_time.py` checks that they give the same total: they match
+  exactly on its fixtures.
+- **Machine settings for the estimate:** `MAX_SPEED_E`, `MAX_ACCEL_X/Z/B/C/E`, `CORNER_SPEED`, `HOME_X/Z/B`,
+  `HOME_SPEED`. They're placeholders equal to the sim's defaults, and they're written to the settings block.
+- **Sim, File panel:**
+  - the slicer's estimate next to the sim's time
+  - a table of machine values that differ between the file and the sim, with a "Use the file's values" button
+    (never applied on its own)
+- **Sim settings are remembered** in the browser. Only values changed from the defaults are stored, so later
+  default fixes still apply.
+
+### Fixed (sim)
+- **Every print was drawn mirrored.** The pipeline writes C = atan2(y, x). With the sim's C direction set to
+  "Normal", a counter-clockwise path was drawn clockwise seen from above. The default is now "Reversed", which
+  matches the S4 convention. Settings files saved before this change bring the old value back.
+- **False "Past axis limit" flags:** the default B range was −100° to 40°, and the pipeline tilts to −130°. The
+  benchy had 14,030 legal moves flagged. The default is now −130° to 30°, the pipeline's range.
+- **Default speeds** now equal the pipeline's `MAX_SPEED_*` (X 150, Z 50 mm/s, B 180, C 360°/s).
+- **Playback at 1× was slower than real time** below 10 fps, and the tip-speed readout was too low with it.
+- **Messages:** removed stale references to the S4 notebook and to an `s4_fix_strays.py` that doesn't exist.
+  Stretched G93 moves are now blamed on "acceleration or axis limits".
+- **Offline:** without internet, the page now says three.js couldn't load instead of staying blank.
+
+### Fixed (pipeline)
+- **Newlines in settings-block values** (a profile description, a Cura override) are escaped. A raw newline would
+  have ended the comment, and the rest of the line would have become G-code.
+
+### Results
+
+Pipeline estimate vs the sim (default settings), pi: 41:12 vs 41:09. The estimate is rounded to 0.1 min.
+
+---
+
 ## 2026-09-28: Realistic axis speeds
 
 ### Fixed

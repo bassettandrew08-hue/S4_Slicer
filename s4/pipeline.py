@@ -116,6 +116,13 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     stats["poles"] = len(poles[0])
     if support_check:
         stats["ungrounded_mm"] = round(support["ungrounded_mm"], 1)
+    # the time R-Theta Sim will show for this file (same planner; the settings header is comments only)
+    from . import print_time
+    with TIMER("print-time estimate"):
+        try:
+            stats["estimated_print_time_min"] = round(print_time.estimate(out_gcode, mp) / 60, 1)
+        except ValueError as e:
+            log(f"[print-time] no estimate: {e}")
 
     # settings comments for the R-Theta simulator, at the top of the final G-code
     from . import sim_header

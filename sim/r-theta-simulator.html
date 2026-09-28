@@ -267,7 +267,7 @@ details.inner > summary::after { order: -1; margin: 0 2px 0 0; }
   <aside class="right">
     <details open><summary>Machine position</summary><div class="body"><div class="readout" id="readout"></div></div></details>
     <details open><summary>Current G-code</summary><div class="body"><div id="gcode"><div class="gl">&nbsp;</div></div></div></details>
-    <details open><summary>File</summary><div class="body"><div class="readout" id="stats"></div></div></details>
+    <details open><summary>File</summary><div class="body"><div class="readout" id="stats"></div><div id="machinecheck"></div></div></details>
     <details open><summary>Slicer settings</summary><div class="body" id="slicer"></div></details>
     <details open><summary>Preflight check</summary><div class="body">
       <p class="muted" id="checksum"></p>
@@ -307,15 +307,15 @@ const DEFAULTS = {
   nozzleOffset: 41.5,
   xzRef: 'tipAtB0',
   bSign: 1,
-  cSign: 1,
+  cSign: -1, // the S4 pipeline writes C = atan2(y, x); with +1 every print was drawn mirrored
   bedDiameter: 200,
   xMin: -10, xMax: 140,
   zMin: -40, zMax: 200,
-  bMin: -100, bMax: 40,
+  bMin: -130, bMax: 30, // the S4 pipeline's tilt range (MIN_ROTATION / MAX_ROTATION)
   homeX: 140, homeZ: 200, homeB: 0,
   // Motion
   feedMode: 'linear',
-  vX: 200, vZ: 12, vB: 360, vC: 720, vE: 60,
+  vX: 150, vZ: 50, vB: 180, vC: 360, vE: 60, // the S4 pipeline's MAX_SPEED_* defaults, so print times match
   aX: 2000, aZ: 200, aB: 5000, aC: 3000, aE: 3000,
   jerk: 8,
   g0Inverse: 'inverse',
@@ -354,10 +354,10 @@ const DEFAULTS = {
 
 const SCHEMA = [
   { group: 'Geometry', items: [
-    ['nozzleOffset', 'B pivot to nozzle tip', 'mm', 'S4 notebook value (41.5). Measure yours.'],
+    ['nozzleOffset', 'B pivot to nozzle tip', 'mm', 'The S4 notebook notes 41.5; the pipeline writes G-code for NOZZLE_OFFSET (42 by default). Measure yours.'],
     ['xzRef', 'G-code X/Z describe', 'select', 'Tip at B=0 is what the S4 output assumes; switch if the part looks warped.', [['tipAtB0','Tip position when B = 0'],['pivot','B pivot position'],['tip','Nozzle tip directly']]],
     ['bSign', 'B direction', 'select', 'Flip if tilted walls lean the wrong way.', [['1','Normal'],['-1','Reversed']]],
-    ['cSign', 'C direction', 'select', 'Flip if the part comes out mirrored.', [['1','Normal'],['-1','Reversed']]],
+    ['cSign', 'C direction', 'select', 'Reversed matches the S4 pipeline (C = atan2(y, x)). Flip if the part comes out mirrored.', [['1','Normal'],['-1','Reversed']]],
     ['bedDiameter', 'Bed diameter', 'mm', 'Placeholder'],
     ['xMin', 'X (radius) min', 'mm', 'Placeholder'], ['xMax', 'X (radius) max', 'mm', 'Placeholder'],
     ['zMin', 'Z min', 'mm', 'Placeholder'], ['zMax', 'Z max', 'mm', 'Placeholder'],
@@ -540,6 +540,8 @@ function computeActual(S, P) {
 }
 
 // ---------- Planner (trapezoidal, with lookahead) ----------
+// The S4 pipeline ports this (and parseGcode) to s4/print_time.py for its print-time estimate. Change both together;
+// tools/check_print_time.py compares them.
 function plan(S, P) {
   const n = P.n, c = P.cmd;
   const L = new Float64Array(n), vc = new Float64Array(n), acc = new Float64Array(n);
@@ -813,7 +815,7 @@ async function preflight(S, P, onProgress) {
       if (tipLen < 0.05) { /* effectively a prime in place: speed checks do not apply */ }
       else if (P.inv[i]) {
         const req = 60 / Math.max(P.feed[i], 1e-9);
-        if (P.dur[i] > req * 2) add('slow', i, `Axis limits stretch this G93 move to ${(P.dur[i] / req).toFixed(1)}× its requested time`);
+        if (P.dur[i] > req * 2) add('slow', i, `Acceleration or axis limits stretch this G93 move to ${(P.dur[i] / req).toFixed(1)}× its requested time`);
       } else {
         const tipV = tipLen / P.dur[i], want = P.feed[i] / 60;
         if (want > 0 && tipV > want * 1.5) add('fast', i, `Nozzle crosses the bed ${(tipV / want).toFixed(1)}× faster than the F value asks`);
@@ -1085,8 +1087,37 @@ function demoGcode(S) {
 if (typeof module !== 'undefined') module.exports = { DEFAULTS, SCHEMA, parseGcode, computeActual, plan, stateAt, sAt, findMove, buildBeadSegments, preflight, supportCheck, filamentStats, extractSlicerInfo, detectConventions, demoGcode, tipMachine, machineToBed, motorsFrom, kinDiffers, mmPerDegB };
 
 // ===== UI + rendering =====
+if (!window.THREE) { // three.js comes from a CDN: without internet the page would stay blank
+  document.body.innerHTML = '<p style="font: 15px/1.5 system-ui; color: #e3e8ee; padding: 40px; max-width: 560px">R-Theta Sim needs three.js, which loads from cdnjs.cloudflare.com. Connect to the internet and reload this page.</p>';
+  throw new Error('three.js not loaded');
+}
 const $ = s => document.querySelector(s);
 let S = JSON.parse(JSON.stringify(DEFAULTS));
+// Settings survive a reload. Only values that differ from DEFAULTS are stored, so a changed default still applies.
+const STORE_KEY = 'rtheta-sim.settings.v1';
+function loadStoredSettings() {
+  try {
+    const o = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    if (!o || o.v !== 1 || !o.s || typeof o.s !== 'object') return;
+    for (const [k, v] of Object.entries(o.s)) {
+      if (!(k in DEFAULTS) || typeof v !== typeof DEFAULTS[k]) continue;
+      if (typeof v === 'number' && !isFinite(v)) continue;
+      if ((k === 'bSign' || k === 'cSign') && v !== 1 && v !== -1) continue;
+      const opts = SCHEMA.flatMap(g => g.items).find(it => it[0] === k && it[2] === 'select');
+      if (opts && typeof v === 'string' && !opts[4].some(o => o[0] === v)) continue; // not one of the choices
+      S[k] = v;
+    }
+  } catch { /* storage blocked or corrupt: keep the defaults */ }
+}
+function saveSettings() {
+  try {
+    const diff = {};
+    for (const k in DEFAULTS) if (S[k] !== DEFAULTS[k]) diff[k] = S[k];
+    if (Object.keys(diff).length) localStorage.setItem(STORE_KEY, JSON.stringify({ v: 1, s: diff }));
+    else localStorage.removeItem(STORE_KEY);
+  } catch { /* storage unavailable (private mode, disabled): settings last until reload */ }
+}
+loadStoredSettings();
 let P = null, srcLines = null, srcName = '';
 let T = 0, playing = false, speedMul = 10;
 let issues = [];
@@ -1360,7 +1391,7 @@ function readouts(now, s, c, i) {
 // ---------- main loop ----------
 let last = performance.now();
 function tick(now) {
-  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const dt = Math.min(0.5, (now - last) / 1000); last = now; // cap: avoid a jump after a stall, but keep 1× real time on heavy files
   if (P && playing && !manual.active) { T += dt * speedMul; if (T >= P.total) { T = P.total; setPlaying(false); } }
   let s, c, i = 0;
   if (manual.active) {
@@ -1534,7 +1565,7 @@ function renderIssues(list) {
     const txt = shown.map(x => x.line === x.endLine ? String(x.line + 1) : `${x.line + 1}-${x.endLine + 1}`).join(',');
     try { await navigator.clipboard.writeText(txt); }
     catch { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
-    toast(`Copied ${shown.length.toLocaleString()} line ranges. Paste them after --drop-lines in s4_fix_strays.py.`);
+    toast(`Copied ${shown.length.toLocaleString()} line ranges.`);
   });
 }
 
@@ -1606,11 +1637,71 @@ function renderConventions(res) {
     return `<div class="conv${k === 0 ? ' best' : ''}"><span>X/Z = ${XZNAME[r.xzRef]}, B ${r.bSign === 1 ? 'normal' : 'reversed'}${cur ? ' <em>(current)</em>' : ''}</span><b>${(r.frac * 100).toFixed(1)}%</b>${cur ? '<i></i>' : `<button data-conv="${k}">Use</button>`}</div>`;
   }).join('') + '<p class="muted">Percent of extruded path floating or below the bed.</p>';
   box.querySelectorAll('[data-conv]').forEach(b => b.addEventListener('click', async () => {
-    const r = res[+b.dataset.conv]; S = { ...S, xzRef: r.xzRef, bSign: r.bSign }; await rebuild(true);
+    const r = res[+b.dataset.conv]; S = { ...S, xzRef: r.xzRef, bSign: r.bSign }; saveSettings(); await rebuild(true);
   }));
 }
+// Machine values the S4 pipeline writes into the settings block (`; s4: KEY = value`), and the sim setting each maps to.
+// The sim's settings describe the real machine, so file values are only offered, never applied on their own.
+const FILE_MACHINE = [
+  ['NOZZLE_OFFSET', 'nozzleOffset', 'B pivot to nozzle tip', 'mm'],
+  ['MIN_ROTATION', 'bMin', 'B min (the slicer\'s tilt clamp)', '°'], ['MAX_ROTATION', 'bMax', 'B max (the slicer\'s tilt clamp)', '°'],
+  ['MAX_SPEED_X', 'vX', 'Max speed X', 'mm/s'], ['MAX_SPEED_Z', 'vZ', 'Max speed Z', 'mm/s'], ['MAX_SPEED_B', 'vB', 'Max speed B', 'deg/s'],
+  ['MAX_SPEED_C', 'vC', 'Max speed C', 'deg/s'], ['MAX_SPEED_E', 'vE', 'Max speed E', 'mm/s'],
+  ['MAX_ACCEL_X', 'aX', 'Accel X', 'mm/s²'], ['MAX_ACCEL_Z', 'aZ', 'Accel Z', 'mm/s²'], ['MAX_ACCEL_B', 'aB', 'Accel B', 'deg/s²'],
+  ['MAX_ACCEL_C', 'aC', 'Accel C', 'deg/s²'], ['MAX_ACCEL_E', 'aE', 'Accel E', 'mm/s²'],
+  ['CORNER_SPEED', 'jerk', 'Corner speed floor', 'mm/s'],
+  ['HOME_X', 'homeX', 'Home X', 'mm'], ['HOME_Z', 'homeZ', 'Home Z', 'mm'], ['HOME_B', 'homeB', 'Home B', 'deg'], ['HOME_SPEED', 'homeSpeed', 'Homing speed', 'mm/s'],
+];
+const slicerInfo = () => P.info || (P.info = extractSlicerInfo(S, P));
+function machineDiffs(I) {
+  const out = [], same = (a, b) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
+  for (const [fk, sk, label, unit] of FILE_MACHINE) {
+    if (!(fk in I.s4)) continue; // older files don't carry every value: that is "not in the file", not a difference
+    const fv = parseFloat(I.s4[fk]);
+    if (isFinite(fv) && !same(fv, S[sk])) out.push({ sk, label, unit, sim: S[sk], file: fv });
+  }
+  const lh = parseFloat(I.header['Layer height']);
+  if (isFinite(lh) && lh > 0 && !same(lh, S.layerH)) out.push({ sk: 'layerH', label: 'Layer height (support check)', unit: 'mm', sim: S.layerH, file: lh });
+  return out;
+}
+function renderMachineCheck() {
+  const box = $('#machinecheck');
+  if (!P) { box.innerHTML = ''; return; }
+  const I = slicerInfo(), est = parseFloat(I.s4.estimated_print_time_min);
+  const found = FILE_MACHINE.some(([fk]) => fk in I.s4);
+  if (!found && !isFinite(est)) { box.innerHTML = ''; return; }
+  const diffs = machineDiffs(I);
+  let h = '';
+  if (isFinite(est) && est > 0) {
+    const r = P.total / 60 / est - 1;
+    if (Math.abs(r) > 0.05) {
+      const how = `The sim's time is ${Math.abs(r * 100).toFixed(0)}% ${r > 0 ? 'longer' : 'shorter'} than the slicer's estimate`;
+      const timing = diffs.filter(d => /^(v|a)[XZBCE]$|^jerk$|^home/.test(d.sk)); // offset, B range, layer height don't change the time
+      const modes = [S.feedMode !== 'linear' && 'feed rate applies to the nozzle tip', S.g0Inverse !== 'inverse' && 'G0 moves in G93 use F as mm/min'].filter(Boolean);
+      if (timing.length) h += `<p class="muted">${how} because the speed, acceleration or homing settings differ from the ones the file was sliced with (below).</p>`;
+      else if (modes.length) h += `<p class="muted">${how}. The slicer assumes the default motion modes, and Settings has: ${modes.join('; ')}.</p>`;
+      else if (!('MAX_ACCEL_X' in I.s4)) h += `<p class="muted">${how}. This file comes from an older pipeline version, whose estimate ignores acceleration.</p>`;
+      else h += `<p class="muted">${how}, even though the machine settings match. The sim's planner and the pipeline's (s4/print_time.py) have drifted apart.</p>`;
+    }
+  }
+  if (diffs.length) {
+    h += `<h3 class="sub">Sliced for different machine settings</h3><div class="readout">`
+      + '<div class="rk faint">Setting</div><div class="rv faint">Sim</div><div class="rs">File</div>'
+      + diffs.map(d => `<div class="rk">${d.label}</div><div class="rv">${fmt(d.sim, 3).replace(/\.?0+$/, '')} ${d.unit}</div><div class="rs">${fmt(d.file, 3).replace(/\.?0+$/, '')}</div>`).join('')
+      + `</div><div class="row" style="margin-top:8px"><button class="btn sm" id="usefilemachine">Use the file's values</button></div>`
+      + `<p class="faint">Only if they describe your printer. The slicer's tilt clamp is not proof of the machine's B range, and the nozzle offset is a measured value.</p>`;
+  }
+  box.innerHTML = h;
+  const b = $('#usefilemachine');
+  if (b) b.addEventListener('click', async () => {
+    const next = { ...S };
+    for (const d of diffs) next[d.sk] = d.file;
+    S = next; saveSettings(); await rebuild(true);
+    toast('Using the file\'s machine settings. They are saved for next time; change them in Settings.');
+  });
+}
 function fileStats() {
-  if (!P) { $('#stats').innerHTML = ''; return; }
+  if (!P) { $('#stats').innerHTML = ''; renderMachineCheck(); return; }
   let bmin = Infinity, bmax = -Infinity, bminE = Infinity, bmaxE = -Infinity;
   for (let s = 0; s <= P.n; s++) { const B = P.cmd[s * 5 + 2]; if (B < bmin) bmin = B; if (B > bmax) bmax = B; }
   for (let s = 0; s < P.beadTotal; s++) { const B = P.segB[s]; if (B < bminE) bminE = B; if (B > bmaxE) bmaxE = B; }
@@ -1620,6 +1711,7 @@ function fileStats() {
     ['Moves', P.n.toLocaleString()],
     ['G93 inverse-time moves', (() => { let k = 0; for (let j = 0; j < P.n; j++) k += P.inv[j]; return k.toLocaleString(); })()],
     ['Print time', fmtT(P.total)],
+    ...(() => { const e = parseFloat(slicerInfo().s4.estimated_print_time_min); return isFinite(e) && e > 0 ? [['Slicer estimate', `${fmtT(e * 60)} (${P.total >= e * 60 ? '+' : '−'}${Math.abs((P.total / (e * 60) - 1) * 100).toFixed(1)}%)`]] : []; })(),
     ['B while extruding', P.beadTotal ? `${fmt(bminE, 1)}° to ${fmt(bmaxE, 1)}°` : '—'],
     ['B overall', `${fmt(bmin, 1)}° to ${fmt(bmax, 1)}°`],
     ['C travel', `${fmt(Math.abs(c1 - c0) / 360, 0)} turns`],
@@ -1628,6 +1720,7 @@ function fileStats() {
     ['G92 E resets', fs.resets.toLocaleString()],
   ];
   $('#stats').innerHTML = rows.map(r => `<div class="rk">${r[0]}</div><div class="rv">${r[1]}</div><div></div>`).join('');
+  renderMachineCheck();
 }
 
 // ---------- slicer settings panel ----------
@@ -1653,7 +1746,7 @@ const SPEC = `; R-Theta Sim reads slicer settings from comments in the G-code.
 ; 2) Cura's ;SETTING_3 lines from the end of Cura's output, copied as-is.
 ;    They hold every setting changed from the profile defaults.
 ;
-; 3) The S4 notebook's own parameters, one per line:
+; 3) The S4 pipeline's own parameters, one per line:
 ; s4: model = benchy upsidedown tilted
 ; s4: MAX_POS_ROTATION = deg2rad(3600)
 ; s4: MAX_NEG_ROTATION = deg2rad(-3600)
@@ -1663,14 +1756,14 @@ const SPEC = `; R-Theta Sim reads slicer settings from comments in the G-code.
 ; s4: ITERATIONS = 1000
 ; s4: failed_points = 1846
 `;
-const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); // also used inside title="..."
 function kvRows(obj, labels) {
   return Object.entries(obj).map(([k, v]) => `<div class="rk" title="${esc(k)}">${esc(labels && labels[k] || k)}</div><div class="rv wrap">${esc(v)}</div><div></div>`).join('');
 }
 function renderSlicer() {
   const box = $('#slicer');
   if (!P) { box.innerHTML = '<p class="faint">Load a file to see what it says about how it was sliced.</p>'; return; }
-  const I = extractSlicerInfo(S, P), M = I.measured;
+  const I = slicerInfo(), M = I.measured;
   let h = '';
   if (I.hasEmbedded) {
     if (Object.keys(I.header).length) {
@@ -1690,9 +1783,8 @@ function renderSlicer() {
     if (Object.keys(I.s4).length) h += `<h3 class="sub">S4 parameters</h3><div class="readout">${kvRows(I.s4)}</div>`;
     if (Object.keys(I.other).length) h += `<details class="inner"><summary>${Object.keys(I.other).length} other settings found</summary><div class="readout">${kvRows(I.other)}</div></details>`;
   } else {
-    h += `<p class="muted">No slicer settings are written in this file. When the S4 notebook rewrites the G-code, Cura's comments appear to be dropped, and the settings can't be worked out from the moves alone. Below is what can be measured instead.</p>
-      <p class="muted">To see the real settings here, have the pipeline copy them into the G-code.</p>
-      <button class="btn sm" id="copyspec">Copy the format for Claude Code</button>`;
+    h += `<p class="muted">No slicer settings are written in this file. G-code from the S4 pipeline (s4_slice.py) starts with a settings block; this file has none (it may come from the S4 notebook or another tool), and the settings can't be worked out from the moves alone. Below is what can be measured instead.</p>
+      <button class="btn sm" id="copyspec">Copy the settings-block format</button>`;
     if (I.topComments.length) h += `<details class="inner"><summary>Comments at the top of the file</summary><div id="gcode">${I.topComments.map(t => `<div class="gl">${esc(t)}</div>`).join('')}</div></details>`;
   }
   const t = r => r ? (r.first === r.max ? `${fmt(r.first, 0)}` : `${fmt(r.first, 0)}, up to ${fmt(r.max, 0)}`) : 'Not set in file';
@@ -1715,7 +1807,7 @@ function renderSlicer() {
   if (cs) cs.addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(SPEC); }
     catch { const ta = document.createElement('textarea'); ta.value = SPEC; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
-    toast('Copied. Paste it to Claude Code and ask it to write these comments into the pipeline output.');
+    toast('Copied the settings-block format.');
   });
 }
 
@@ -1751,7 +1843,7 @@ function readSettings() {
 function openSettings(on) { $('#settings').hidden = !on; if (on) { buildSettings(); $('#settings').querySelector('input,select').focus(); } }
 $('#opensettings').addEventListener('click', () => openSettings(true));
 $('#closesettings').addEventListener('click', () => openSettings(false));
-$('#applysettings').addEventListener('click', async () => { S = readSettings(); openSettings(false); await rebuild(true); if (!srcLines) buildMachine(); });
+$('#applysettings').addEventListener('click', async () => { S = readSettings(); saveSettings(); openSettings(false); await rebuild(true); if (!srcLines) buildMachine(); });
 $('#resetsettings').addEventListener('click', () => { S = JSON.parse(JSON.stringify(DEFAULTS)); buildSettings(); });
 $('#exportsettings').addEventListener('click', () => {
   const blob = new Blob([JSON.stringify(readSettings(), null, 2)], { type: 'application/json' });

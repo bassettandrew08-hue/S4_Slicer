@@ -163,6 +163,22 @@ Some bridging is normal: sparse gyroid infill does it even in a flat print. Skip
 
 The block is deterministic (no timestamps), so two runs with the same settings give identical files.
 
+**Viewing a print in R-Theta Sim:** open `sim/r-theta-simulator.html` in a browser (double-click it; it needs internet
+once per load for three.js from cdnjs) and drop the G-code on it. Its File panel shows:
+- **Print time**, the sim's own time, next to the **Slicer estimate** from the settings block. The pipeline computes
+  the estimate with a port of the sim's planner (`s4/print_time.py`), so with the same machine settings the two
+  agree to within rounding.
+- **Sliced for different machine settings**, if the file's machine values (`NOZZLE_OFFSET`, the B range,
+  `MAX_SPEED_*`, `MAX_ACCEL_*`, `CORNER_SPEED`, `HOME_*`, the layer height) differ from the sim's settings. "Use the
+  file's values" copies them in; the sim never does it on its own, because its settings describe your real printer.
+  With default settings the table always lists the nozzle offset (sim 41.5, pipeline 42) and usually the layer
+  height, until you settle them.
+
+The sim remembers its settings in the browser (Chrome shares storage between all local HTML files; Firefox may
+forget them if the file moves). "Reset to defaults" then Apply clears them. Two things to confirm on the real
+printer: the **C direction** (the sim assumes the S4 convention: jog C+ and check which way the bed turns against
+the view) and the **nozzle offset** (the notebook notes 41.5 mm; the pipeline uses `NOZZLE_OFFSET` = 42).
+
 Files in `build/<model>/`:
 
 | file | contents |
@@ -233,6 +249,8 @@ Every section and key is optional; anything left out keeps its default.
 | `LIMIT_AXIS_SPEEDS` | true | slow down any move that would drive an axis past the limits below (section 8) |
 | `MAX_SPEED_C`, `MAX_SPEED_B` | 360, 180 | deg/s, bed rotation and nozzle tilt. Placeholders: set your machine's real limits |
 | `MAX_SPEED_X`, `MAX_SPEED_Z` | 150, 50 | mm/s. Placeholders, as above |
+| `MAX_SPEED_E`, `MAX_ACCEL_X`, `MAX_ACCEL_Z`, `MAX_ACCEL_B`, `MAX_ACCEL_C`, `MAX_ACCEL_E`, `CORNER_SPEED` | 60, 2000, 200, 5000, 3000, 3000, 8 | for the print-time estimate only (mm/s, mm/s², deg/s²; `CORNER_SPEED` is the sim's corner speed floor). Placeholders equal to R-Theta Sim's defaults |
+| `HOME_X`, `HOME_Z`, `HOME_B`, `HOME_SPEED` | 140, 200, 0, 40 | where `G28` goes and how fast, for the estimate. Same as the sim |
 | `RETRACTION_LENGTH` | null | mm; `null` = use Cura's `retraction_amount` |
 
 ### `cura`: slicing
@@ -268,10 +286,14 @@ failure. Today they are byte-identical. Add `--notebook-exact` to check the note
 Other tools:
 ```
 venv\Scripts\python tools\compare_gcode.py a.gcode b.gcode
+venv\Scripts\python tools\check_print_time.py
 venv\Scripts\python s4_slice.py model.stl --notebook-exact
 venv\Scripts\python tools\run_reference.py map --model M.stl --out DIR --sliced planar.gcode --deformed-pkl pickle_files/deformed_M.pkl
 ```
 - `compare_gcode.py` compares any two 4-axis files, with tolerances.
+- `check_print_time.py` checks that the pipeline's print-time estimate (`s4/print_time.py`) equals R-Theta Sim's on
+  the fixtures in `tools/fixtures/`. Run it after changing either planner, and refresh its expected numbers from the
+  sim (the script says how).
 - `--notebook-exact` reproduces old notebook results.
 - `run_reference.py` maps a notebook pickle.
 

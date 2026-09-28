@@ -83,6 +83,8 @@ def setting3_generated(cura_info):
 
 
 def _fmt(v):
+    if isinstance(v, str):
+        return v.replace("\r", "\\r").replace("\n", "\\n")  # a raw newline would end the comment line
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, float):
@@ -114,7 +116,7 @@ def s4_lines(model_name, profile, stats, deform_info=None, planar_source=None):
     from .params import expand_iterations
     out = [f"; s4: model = {model_name}", f"; s4: pipeline_version = {git_version()}"]
     if profile.get("description"):
-        out.append(f"; s4: description = {profile['description']}")
+        out.append(f"; s4: description = {_fmt(profile['description'])}")
     if planar_source:
         out.append(f"; s4: planar_gcode = {planar_source}")
     deform = profile["deform"]
