@@ -128,7 +128,7 @@ A run prints these lines, in order:
 | `[deform]` | the deformation's own check: tilt achieved vs aimed for (`tilt_deg` / `target_tilt_deg`), folded tets and their volume, island seeds left. It prints a WARNING if the tilt falls well short |
 | `[slice]` | the key Cura values actually used (layer height, line width, retraction, flavor, ...) |
 | `[support]` | plastic that would be printed in mid-air, by kind (see below) |
-| `[quality]` | poles: extrusion dragged more than 2 mm straight down from a travel (should always say "none"), and steep extruding segments (informational) |
+| `[quality]` | poles: extrusion dragged more than 2 mm straight down from a travel (should always say "none"), and extrusion running along the nozzle's own axis (pushing into or pulling out of the bead). Vertical moves with the nozzle tilted sideways are normal S4 printing and aren't flagged |
 | `[map]` | point counts from the mapping step |
 | timing table | seconds per stage |
 
@@ -210,8 +210,9 @@ Every section and key is optional; anything left out keeps its default.
 | `ISLAND_LIFT_SLOPE` | 0.5 | `island_free`: every point must be reachable from the bed rising at least this much per mm. Higher = stricter (1.0 ≈ 45° overhangs) but more distortion |
 | `ISLAND_LIFT_ROUNDS` | 5 | `island_free`: rounds of lifting |
 | `FIT_METHOD` | `penalty` | `island_free`: `penalty` (robust on any mesh) or `barrier` (strictly fold-free, but can stall on fine meshes) |
-| `FOLD_PENALTY`, `FOLD_PENALTY_DET` | 100, 0.5 | `penalty`: how hard tets squashed below 0.5× volume (or folded) are pushed back. Lower lets more tilt through but squashes thin features into steep, near-vertical print segments |
+| `FOLD_PENALTY`, `FOLD_PENALTY_DET` | 100, 0.5 | `penalty`: how hard tets squashed below 0.5× volume (or folded) are pushed back. Lower lets thin features squash (the pi then extrudes along the nozzle axis) |
 | `PENALTY_ITERATIONS`, `LIFT_ITERATIONS` | 300, 100 | `penalty`: solver iterations for the fit, and per lifting round |
+| `BED_PIN_WEIGHT`, `BED_TOL` | 0, 0.3 | `island_free`: the bed face (vertices within `BED_TOL` mm of the lowest point) always counts as supported. `BED_PIN_WEIGHT` > 0 also holds it flat on the bed; off by default, since it costs tilt and support (benchy: 1475 mm unsupported at 500) |
 | `LIFT_WEIGHT` | 50 | `island_free`: strength of the lift targets. Too weak and the fold penalty wins over the lift, leaving islands (Squirtle kept an unsupported tower at 5) |
 | `FLIP_FREE_STAGES`, `FLIP_FREE_STAGE_ITERATIONS`, `BARRIER_WEIGHT` | 10, 150, 0.02 | `barrier` only: tilt ramp stages and barrier strength |
 | `SLIVER_QUALITY`, `MICRO_TET_VOLUME` | 0.03, 1e-3 | `barrier` only: badly shaped or tiny tets get no barrier (they would stall it) |
@@ -316,7 +317,7 @@ The rotation (tilt) field is the notebook's in every case.
 | retractions | `SPLIT_RETRACTIONS` | retract/unretract in place, at Cura's retraction speed (the notebook extruded during a 1 mm plunge, leaving "sticks") |
 | extrusion compensation | `SMOOTH_EXTRUSION_MULTIPLIER`, `EXTRUSION_MULTIPLIER_RANGE` | blended smoothly along the path and clamped to 0.5×–2× (was constant per tet, so flow jumped) |
 | start code | `strip_start_prime` | Cura's prime is dropped (it became a floating blob inside the part) |
-| travel re-entry | `SAFE_TRAVEL_TRANSITIONS` | after a travel that left the part, the nozzle lowers before printing (the notebook printed downward from the lifted point, drawing "poles"); rotation-split steps keep their own move's command |
+| travel re-entry | `SAFE_TRAVEL_TRANSITIONS` | after a travel that left the part, the nozzle lowers before printing (the notebook printed downward from the lifted point, drawing "poles"); rotation-split steps keep their own move's command; points mapped just below the bed are clamped to it instead of dropped |
 | nozzle offset | `NOZZLE_OFFSET` | taken from the profile (was hard-coded to 42) |
 
 Why each of these was needed, with measurements, is in the [changelog](CHANGELOG.md).

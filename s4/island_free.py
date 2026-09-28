@@ -41,6 +41,9 @@ DEFAULTS = dict(
     FOLD_PENALTY_DET=0.5,        # penalty: tets squashed below this volume ratio (or folded) are penalised
     PENALTY_ITERATIONS=300,
     LIFT_ITERATIONS=100,         # solver iterations per lifting round (warm-started)
+    BED_PIN_WEIGHT=0.0,          # > 0: hold the part's bed face flat on the bed. Off: pinning fights the tilt near the
+                                 # base (the benchy got 1475 mm of unsupported extrusion at 500)
+    BED_TOL=0.3,                 # mm: vertices this close to the lowest point form the bed face (always grounded)
     SLIVER_QUALITY=0.03,         # barrier: tets with mean-ratio shape quality below this get no fold barrier
     MICRO_TET_VOLUME=1e-3,       # barrier: ... nor do tets smaller than this fraction of the median tet volume
     PRECOND_FLOOR=0.0,           # minimum per-vertex stiffness in the solver's preconditioner (x median)
@@ -324,11 +327,12 @@ def vertex_graph(cells, n):
     return nbrs
 
 
-def priority_flood(V, nbrs, slope, bed_tol):
-    """Lowest heights >= z so that every vertex is reachable from the bed by a path rising >= slope per mm."""
+def priority_flood(V, nbrs, slope, bed_tol, bed=None):
+    """Lowest heights >= z so that every vertex is reachable from the bed by a path rising >= slope per mm. The bed
+    is the given vertices (the pinned bed face) or else everything within bed_tol of the lowest point."""
     z = V[:, 2]; n = len(z)
     h = np.full(n, np.inf); done = np.zeros(n, bool); pq = []
-    for v in np.nonzero(z <= z.min() + bed_tol)[0].tolist():
+    for v in (np.nonzero(z <= z.min() + bed_tol)[0] if bed is None else bed).tolist():
         h[v] = z[v]; heapq.heappush(pq, (float(z[v]), v))
     xy = V[:, :2].tolist(); zl = z.tolist()
     while pq:
@@ -347,11 +351,15 @@ def priority_flood(V, nbrs, slope, bed_tol):
     return h
 
 
-def island_seeds(V, nbrs, bed_tol=1.0, min_persistence=0.2):
+def island_seeds(V, nbrs, bed_tol=1.0, min_persistence=0.2, bed=None):
     """Local height minima not connected to the bed, with how much height they float for (sublevel-set persistence).
     Returns [(birth vertex, birth z, merge z, vertices)]."""
     z = V[:, 2]; n = len(z)
-    parent = list(range(n)); birth = z.copy(); grounded = z <= z.min() + bed_tol; size = np.ones(n, int)
+    parent = list(range(n)); birth = z.copy(); size = np.ones(n, int)
+    if bed is None:
+        grounded = z <= z.min() + bed_tol
+    else:
+        grounded = np.zeros(n, bool); grounded[bed] = True
 
     def find(x):
         while parent[x] != x:
@@ -381,18 +389,28 @@ def island_seeds(V, nbrs, bed_tol=1.0, min_persistence=0.2):
 
 # ----------------------------------------------------------------------------------------------- driver
 
+def _grounded(V, bed, tol=0.5):
+    """Vertices standing on the bed: the part's bed face, plus anything within tol of the lowest point."""
+    return np.union1d(bed, np.nonzero(V[:, 2] <= V[:, 2].min() + tol)[0]).astype(np.int64)
+
+
 def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     """Fold-free fit of the rotation field, then island lifting. Returns (new vertex positions, info dict)."""
     q = {**DEFAULTS, **{k: p[k] for k in DEFAULTS if k in p}}
     t0 = time.perf_counter()
     P0 = np.asarray(points, dtype=np.float64)
     V = P0.copy(); iters = 0
+    # the part's bed face: supported by the bed wherever the deformation puts it
+    bed = np.nonzero(P0[:, 2] <= P0[:, 2].min() + float(q["BED_TOL"]))[0].astype(np.int64)
+    pin = None
+    if float(q["BED_PIN_WEIGHT"]) > 0:
+        pin = (bed, P0[bed, 2].copy(), np.full(len(bed), float(q["BED_PIN_WEIGHT"])))
     if q["FIT_METHOD"] == "penalty":
         prob = PenaltyProblem(P0, cells, gamma=float(q["FOLD_PENALTY"]), eps=float(q["FOLD_PENALTY_DET"]),
                               precond_floor=float(q["PRECOND_FLOOR"]))
         R = rotation_matrices(cell_centers, rotation_field)
-        V = prob.linear_start(R)
-        V, iters = prob.solve(R, V, int(q["PENALTY_ITERATIONS"]))
+        V = prob.linear_start(R, pin)
+        V, iters = prob.solve(R, V, int(q["PENALTY_ITERATIONS"]), lift=pin)
     elif q["FIT_METHOD"] == "barrier":
         prob = FitProblem(P0, cells, q["BARRIER_WEIGHT"], sliver_quality=float(q["SLIVER_QUALITY"]),
                           micro_volume=float(q["MICRO_TET_VOLUME"]), precond_floor=float(q["PRECOND_FLOOR"]))
@@ -400,7 +418,7 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
         R = None
         for k in range(1, stages + 1):
             R = rotation_matrices(cell_centers, (k / stages) * rotation_field)
-            V, it = prob.solve(R, V, int(q["FLIP_FREE_STAGE_ITERATIONS"]))
+            V, it = prob.solve(R, V, int(q["FLIP_FREE_STAGE_ITERATIONS"]), lift=pin)
             iters += it
     else:
         raise ValueError(f"unknown FIT_METHOD {q['FIT_METHOD']!r} (use 'penalty' or 'barrier')")
@@ -410,17 +428,21 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     if lift:
         tgt = np.full(len(P0), -np.inf)
         for r in range(int(q["ISLAND_LIFT_ROUNDS"])):
-            h = priority_flood(V, nbrs, float(q["ISLAND_LIFT_SLOPE"]), bed_tol=0.5)
+            h = priority_flood(V, nbrs, float(q["ISLAND_LIFT_SLOPE"]), bed_tol=0.5,
+                               bed=_grounded(V, bed))
             need = (h - V[:, 2]) > 0.02
             if not need.any():
                 break
             tgt = np.maximum(tgt, np.where(need, h, -np.inf))
             idx = np.nonzero(np.isfinite(tgt))[0].astype(np.int64)
+            targets = (idx, tgt[idx], np.full(len(idx), float(q["LIFT_WEIGHT"])))
+            if pin is not None:
+                targets = tuple(np.concatenate([a, b]) for a, b in zip(targets, pin))
             V, it = prob.solve(R, V, int(q["LIFT_ITERATIONS"]) if q["FIT_METHOD"] == "penalty" else 300,
-                               lift=(idx, tgt[idx], np.full(len(idx), float(q["LIFT_WEIGHT"]))))
+                               lift=targets)
             iters += it
             lifted = len(idx)
-    seeds = island_seeds(V, nbrs)
+    seeds = island_seeds(V, nbrs, bed=_grounded(V, bed, tol=1.0))
     c = np.asarray(cells)
     J = np.stack([V[c[:, k]] - V[c[:, 0]] for k in (1, 2, 3)], axis=2) @ prob.Dm_inv
     det = np.linalg.det(J)
@@ -506,8 +528,9 @@ class PenaltyProblem(FitProblem):
     def max_step(self, x, d):
         return 1.2  # no hard constraint
 
-    def linear_start(self, R):
-        """Exact minimiser of the fit term alone (sum vol |J - R|^2): the starting point."""
+    def linear_start(self, R, pin=None):
+        """Exact minimiser of the fit term (sum vol |J - R|^2), plus the z targets in pin if given: the starting
+        point."""
         Gi = self.Dm_inv  # rows of Dm^-1 are the basis-function gradients (J = Ds Dm^-1)
         G = np.concatenate([-Gi.sum(axis=1, keepdims=True), Gi], axis=1)
         T = self.vol[:, None, None] * R
@@ -516,5 +539,12 @@ class PenaltyProblem(FitProblem):
         for k in range(4):
             np.add.at(b, self.cells[:, k], B[:, k, :])
         K = self.K_raw
-        lu = splu((K + 1e-9 * np.median(K.diagonal()) * identity(self.n, format="csc")).tocsc())
-        return np.column_stack([lu.solve(b[:, k] + 1e-9 * self.P0[:, k]) for k in range(3)])
+        reg = 1e-9 * np.median(K.diagonal())
+        lu = splu((K + reg * identity(self.n, format="csc")).tocsc())
+        cols = [lu.solve(b[:, k] + 1e-9 * self.P0[:, k]) for k in range(3)]
+        if pin is not None:
+            idx, t, w = pin
+            wz = np.zeros(self.n); bz = b[:, 2] + 1e-9 * self.P0[:, 2]
+            np.add.at(wz, idx, w); np.add.at(bz, idx, w * t)
+            cols[2] = splu((K + diags(wz + reg)).tocsc()).solve(bz)
+        return np.column_stack(cols)

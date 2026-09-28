@@ -224,10 +224,11 @@ def _format_local(r):
 
 
 def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0):
-    """Extruding moves in the final 4-axis G-code whose nozzle-tip path is mostly vertical and longer than min_dz.
-    Returns (poles, steep): poles start right after a travel and drop more than pole_dz (extrusion dragged down from
-    a lifted travel point: these print as free-standing sticks); steep ones are the rest, typically a steep stretch
-    of curved layer."""
+    """Suspicious extruding moves (longer than min_dz) in the final 4-axis G-code. Returns (poles, along_axis):
+    poles start right after a travel and drop straight down more than pole_dz (extrusion dragged down from a lifted
+    travel point: these print as free-standing sticks); along_axis ones run mostly along the nozzle's own axis
+    (pushing into or pulling out of the bead). A vertical move with the nozzle tilted sideways is normal S4 printing
+    and isn't flagged."""
     import re
     word = re.compile(r"([CXZBE])(-?\d+(?:\.\d*)?|-?\.\d+)")
     rows = []
@@ -249,11 +250,18 @@ def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0):
     dz = np.abs(d[:, 2]); dxy = np.hypot(d[:, 0], d[:, 1])
     E = a[:, 5]
     printing = (np.nan_to_num(E) > 0) & ~np.isclose(E, 1.0)
-    bad = printing[1:] & (dz > min_dz) & (dxy < 0.5 * dz)
+    n = np.linalg.norm(d, axis=1)
+    bb, tt = b[1:], th[1:]  # nozzle axis at the segment end: radial -sin B, vertical cos B
+    axis = np.c_[-np.sin(bb) * np.cos(tt), -np.sin(bb) * np.sin(tt), np.cos(bb)]
+    along = np.abs(np.sum(d * axis, axis=1)) > 0.894 * n  # within ~27 deg of the nozzle axis
+    vertical = (dz > min_dz) & (dxy < 0.5 * dz)
     poles, steep = [], []
-    for k in np.nonzero(bad)[0]:
+    for k in np.nonzero(printing[1:] & (n > min_dz) & (vertical | along))[0]:
         item = (int(a[k + 1, 0]), float(P[k, 2]), float(P[k + 1, 2]), [round(float(v), 1) for v in P[k + 1, :2]])
-        (poles if (not printing[k] and dz[k] > pole_dz) else steep).append(item)
+        if vertical[k] and not printing[k] and dz[k] > pole_dz:
+            poles.append(item)
+        elif along[k]:
+            steep.append(item)
     return poles, steep
 
 
@@ -263,5 +271,5 @@ def format_vertical(result, line_offset=0):
     for line, z0, z1, xy in poles[:3]:
         s += f"\n[quality]   G-code line {line + line_offset}: z {z0:.1f} -> {z1:.1f} at {xy}"
     if steep:
-        s += f"\n[quality] steep extruding segments (>1 mm, mostly vertical; usually a steep stretch of curved layer): {len(steep)}"
+        s += f"\n[quality] extruding along the nozzle axis (>1 mm; pushing into or pulling out of the bead): {len(steep)}"
     return s

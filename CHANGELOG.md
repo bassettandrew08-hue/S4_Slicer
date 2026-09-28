@@ -20,15 +20,22 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
   target tilt), then a soft penalty pushes open any tet squashed below 0.5× volume or folded. There's no step cap,
   so nothing can jam. The old method is `FIT_METHOD: "barrier"`, now with a correct preconditioner and optional
   sliver/micro-tet exemptions.
-- **Steep, near-vertical print segments** (pi 597, z mount 100, dino 38, B-axis mount 34). A weak fold penalty let
-  thin features squash flat, which stands their layers up on end. Defaults are now `FOLD_PENALTY_DET: 0.5` (was 0.2)
-  and `LIFT_WEIGHT: 50` (was 5), so the lift still wins against the stronger penalty (at 5, Squirtle kept an
-  unsupported tower).
+- **Defaults `FOLD_PENALTY_DET: 0.5` (was 0.2) and `LIFT_WEIGHT: 50` (was 5).** At 0.2, thin features squashed flat
+  and the pi extruded along the nozzle axis (278 segments). The lift weight goes up with the penalty so lifting still
+  wins (at 5, Squirtle kept an unsupported tower).
 - **Poles on the dino** (2, one of them 21 mm long). A travel ended just outside the part and mapped 0.07 mm below the
   bed. `write_gcode` drops points below z = 0, so the travel down to the re-entry point disappeared (and the unretract
   with it), and the next print move extruded straight down from the travel height. With `SAFE_TRAVEL_TRANSITIONS`
   (default; off with `--notebook-exact`), mapped points below the bed are now clamped to z = 0.
 - **`[quality]` pole line numbers** now count the settings block, so they match the final file.
+- **The bed face always counts as supported.** Island lifting only treated the lowest deformed points as standing on
+  the bed. The exact fit tilts the base with the region above it, so most of a part's bed face ended up higher and
+  was lifted as if it floated. Now vertices on the real bed are grounded wherever they land (`BED_TOL`, 0.3 mm).
+  `BED_PIN_WEIGHT` (off by default) can also hold the bed face flat, but that fights the tilt near the base: the
+  benchy got 1475 mm of unsupported extrusion, the B-axis mount lost 5° of tilt.
+- **`[quality]` no longer flags sideways printing.** It used to count every near-vertical extruding move as "steep".
+  With the nozzle tilted toward −90°, a vertical move is just printing along a curved layer, which is the point of
+  S4. It now flags extrusion along the nozzle's own axis (within ~27°), which pushes into or pulls out of the bead.
 
 ### Added
 - **`[deform]` now reports the tilt achieved against the tilt aimed for:** volume-weighted rotation about the B axis,
@@ -37,17 +44,17 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
 
 ### Results (default settings)
 
-| model | tilt achieved / aimed | B range | ungrounded extrusion | steep segments | folded volume |
-|---|---|---|---|---|---|
-| Squirtle | 24.8° / 27.7° | −50° … +13° (was −1.5° … +0.4°) | 8 mm (was 62 mm) | 0 | 0% |
-| benchy | 48.8° / 52.0° | −128° … +29° | 51 mm | 2 | 0.0001% |
-| pi | 43.9° / 39.8° | −90° … +12° | 2 mm | 0 | 0% |
-| dino | 22.0° / 30.1° | −106° … 0° | 16 mm | 28 | 0.07% |
-| z mount | 27.4° / 32.2° | −94° … +23° | 3 mm | 1 | 0% |
-| B-axis mount | 35.5° / 33.4° | −108° … +12° | 12 mm | 3 | 0% |
+| model | tilt achieved / aimed | ungrounded extrusion | extruding along the nozzle axis |
+|---|---|---|---|
+| Squirtle | 24.8° / 27.7° (B was within ±1.5°) | 5 mm (was 62 mm) | 0 |
+| benchy | 48.7° / 52.0° | 57 mm | 0 |
+| pi | 37.5° / 39.8° | 0 mm | 0 (278 at the old defaults) |
+| dino | 22.3° / 30.1° | 11 mm | 0 |
+| z mount | 27.0° / 32.2° | 3 mm | 0 |
+| B-axis mount | 28.9° / 33.4° | 3 mm | 0 |
 
-Tilts beyond −90° are where lifting shears an overhang, so its layers (and the nozzle) turn past horizontal; all stay
-within the mapper's −130° limit (`MIN_ROTATION`). Squirtle's deformation takes about 85 s. No model has poles.
+Large tilts are expected: parts like the dino's nose print nearly sideways (B toward −90°), in rings growing outward.
+No model has poles. Squirtle's deformation takes about 85 s.
 
 ---
 
