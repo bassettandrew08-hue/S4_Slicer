@@ -297,6 +297,10 @@ def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
         if ok[i]:
             new_position = list(newp[i])
             rotation = rots[i]
+            if SAFE and new_position[2] < 0:
+                # a point just outside the part can map a little below the bed; write_gcode drops z < 0, which
+                # lost the travel down to the re-entry point and left a print move extruding straight down
+                new_position[2] = 0.0
             if travelling_over_air:
                 if SAFE:
                     reentry = list(new_position)

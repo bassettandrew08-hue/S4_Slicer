@@ -109,7 +109,6 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     from . import support_check as sc2
     poles = sc2.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"])
     stats["poles"] = len(poles[0])
-    log(sc2.format_vertical(poles))
     if support_check:
         stats["ungrounded_mm"] = round(support["ungrounded_mm"], 1)
 
@@ -127,6 +126,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     shown = dict(prof); shown["map"] = dict(prof["map"], RETRACTION_LENGTH=retraction)  # the value actually used
     header = sim_header.build(name, shown, stats, planar_path, info, _fd.LAST_DEFORM_INFO)
     sim_header.prepend(out_gcode, header)
+    log(sc2.format_vertical(poles, line_offset=len(header)))  # line numbers in the final file
     total = time.perf_counter() - t0
     log(f"[map] {stats}")
     log(f"[done] {out_gcode}  ({total:.1f} s)")

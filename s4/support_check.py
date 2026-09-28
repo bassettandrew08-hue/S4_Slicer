@@ -257,11 +257,11 @@ def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0):
     return poles, steep
 
 
-def format_vertical(result):
+def format_vertical(result, line_offset=0):
     poles, steep = result
     s = f"[quality] poles (extruding >2 mm straight down from a travel): {len(poles) or 'none'}"
     for line, z0, z1, xy in poles[:3]:
-        s += f"\n[quality]   G-code line {line}: z {z0:.1f} -> {z1:.1f} at {xy}"
+        s += f"\n[quality]   G-code line {line + line_offset}: z {z0:.1f} -> {z1:.1f} at {xy}"
     if steep:
         s += f"\n[quality] steep extruding segments (>1 mm, mostly vertical; usually a steep stretch of curved layer): {len(steep)}"
     return s

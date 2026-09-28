@@ -31,14 +31,14 @@ from .fast_map import rotation_matrices
 DEFAULTS = dict(
     ISLAND_LIFT_SLOPE=0.5,       # mm of rise per mm; 0.5 ~ overhangs up to ~63 deg from vertical in deformed space
     ISLAND_LIFT_ROUNDS=5,
-    LIFT_WEIGHT=5.0,
+    LIFT_WEIGHT=50.0,
     BARRIER_WEIGHT=0.02,         # beta
     FLIP_FREE_STAGES=10,
     FLIP_FREE_STAGE_ITERATIONS=150,
     FIT_METHOD="penalty",        # "penalty": exact linear fit, then a soft fold penalty (robust on any mesh);
                                  # "barrier": fold-free barrier + staged homotopy (strict, but can stall on fine meshes)
     FOLD_PENALTY=100.0,          # penalty: strength
-    FOLD_PENALTY_DET=0.2,        # penalty: tets squashed below this volume ratio (or folded) are penalised
+    FOLD_PENALTY_DET=0.5,        # penalty: tets squashed below this volume ratio (or folded) are penalised
     PENALTY_ITERATIONS=300,
     LIFT_ITERATIONS=100,         # solver iterations per lifting round (warm-started)
     SLIVER_QUALITY=0.03,         # barrier: tets with mean-ratio shape quality below this get no fold barrier

@@ -994,6 +994,8 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
                 else:
                     continue
             else:
+                if SAFE_TRAVEL_TRANSITIONS and new_position[2] < 0:  # not in the notebook: clamp to the bed
+                    new_position[2] = 0.0
                 if travelling_over_air:
                     if SAFE_TRAVEL_TRANSITIONS:  # not in the notebook
                         reentry = new_position.copy()

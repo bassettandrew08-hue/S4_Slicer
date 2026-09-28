@@ -17,9 +17,18 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
     Squirtle's fine, irregular one: 115k tets, 11% of them micro-tets.
   - **The hard fold barrier.** On meshes with slivers and micro-tets, a few tets pin every step.
 - **New default `FIT_METHOD: "penalty"`.** Start from the exact least-squares fit (one sparse solve, which reaches the
-  target tilt), then a soft penalty pushes open any tet squashed below 0.2× volume or folded. There's no step cap,
+  target tilt), then a soft penalty pushes open any tet squashed below 0.5× volume or folded. There's no step cap,
   so nothing can jam. The old method is `FIT_METHOD: "barrier"`, now with a correct preconditioner and optional
   sliver/micro-tet exemptions.
+- **Steep, near-vertical print segments** (pi 597, z mount 100, dino 38, B-axis mount 34). A weak fold penalty let
+  thin features squash flat, which stands their layers up on end. Defaults are now `FOLD_PENALTY_DET: 0.5` (was 0.2)
+  and `LIFT_WEIGHT: 50` (was 5), so the lift still wins against the stronger penalty (at 5, Squirtle kept an
+  unsupported tower).
+- **Poles on the dino** (2, one of them 21 mm long). A travel ended just outside the part and mapped 0.07 mm below the
+  bed. `write_gcode` drops points below z = 0, so the travel down to the re-entry point disappeared (and the unretract
+  with it), and the next print move extruded straight down from the travel height. With `SAFE_TRAVEL_TRANSITIONS`
+  (default; off with `--notebook-exact`), mapped points below the bed are now clamped to z = 0.
+- **`[quality]` pole line numbers** now count the settings block, so they match the final file.
 
 ### Added
 - **`[deform]` now reports the tilt achieved against the tilt aimed for:** volume-weighted rotation about the B axis,
@@ -28,16 +37,17 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
 
 ### Results (default settings)
 
-| model | tilt achieved / aimed | B range | ungrounded extrusion | folded volume |
-|---|---|---|---|---|
-| Squirtle | 24.8° / 27.7° | −49° … +22° (was −1.5° … +0.4°) | 2 mm (was 62 mm) | 0.0007% |
-| benchy | 48.8° / 52.0° | −111° … +15° | 64 mm | 0% |
-| pi | 39.4° / 39.8° | −66° … +14° | 7 mm | 0% |
-| dino | 22.5° / 30.1° | −51° … 0° | 43 mm | 0% |
-| z mount | 27.1° / 32.2° | −72° … +12° | 2 mm | 0% |
-| B-axis mount | 34.3° / 33.4° | −77° … +4° | 2 mm | 0% |
+| model | tilt achieved / aimed | B range | ungrounded extrusion | steep segments | folded volume |
+|---|---|---|---|---|---|
+| Squirtle | 24.8° / 27.7° | −50° … +13° (was −1.5° … +0.4°) | 8 mm (was 62 mm) | 0 | 0% |
+| benchy | 48.8° / 52.0° | −128° … +29° | 51 mm | 2 | 0.0001% |
+| pi | 43.9° / 39.8° | −90° … +12° | 2 mm | 0 | 0% |
+| dino | 22.0° / 30.1° | −106° … 0° | 16 mm | 28 | 0.07% |
+| z mount | 27.4° / 32.2° | −94° … +23° | 3 mm | 1 | 0% |
+| B-axis mount | 35.5° / 33.4° | −108° … +12° | 12 mm | 3 | 0% |
 
-Squirtle's deformation takes about 85 s. No model has poles.
+Tilts beyond −90° are where lifting shears an overhang, so its layers (and the nozzle) turn past horizontal; all stay
+within the mapper's −130° limit (`MIN_ROTATION`). Squirtle's deformation takes about 85 s. No model has poles.
 
 ---
 

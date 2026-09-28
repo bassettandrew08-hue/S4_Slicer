@@ -210,9 +210,9 @@ Every section and key is optional; anything left out keeps its default.
 | `ISLAND_LIFT_SLOPE` | 0.5 | `island_free`: every point must be reachable from the bed rising at least this much per mm. Higher = stricter (1.0 ≈ 45° overhangs) but more distortion |
 | `ISLAND_LIFT_ROUNDS` | 5 | `island_free`: rounds of lifting |
 | `FIT_METHOD` | `penalty` | `island_free`: `penalty` (robust on any mesh) or `barrier` (strictly fold-free, but can stall on fine meshes) |
-| `FOLD_PENALTY`, `FOLD_PENALTY_DET` | 100, 0.2 | `penalty`: how hard tets squashed below 0.2× volume (or folded) are pushed back |
+| `FOLD_PENALTY`, `FOLD_PENALTY_DET` | 100, 0.5 | `penalty`: how hard tets squashed below 0.5× volume (or folded) are pushed back. Lower lets more tilt through but squashes thin features into steep, near-vertical print segments |
 | `PENALTY_ITERATIONS`, `LIFT_ITERATIONS` | 300, 100 | `penalty`: solver iterations for the fit, and per lifting round |
-| `LIFT_WEIGHT` | 5 | `island_free`: strength of the lift targets |
+| `LIFT_WEIGHT` | 50 | `island_free`: strength of the lift targets. Too weak and the fold penalty wins over the lift, leaving islands (Squirtle kept an unsupported tower at 5) |
 | `FLIP_FREE_STAGES`, `FLIP_FREE_STAGE_ITERATIONS`, `BARRIER_WEIGHT` | 10, 150, 0.02 | `barrier` only: tilt ramp stages and barrier strength |
 | `SLIVER_QUALITY`, `MICRO_TET_VOLUME` | 0.03, 1e-3 | `barrier` only: badly shaped or tiny tets get no barrier (they would stall it) |
 
