@@ -97,6 +97,11 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
                                                 meshio_s4.make_find_cells(deformed), planar_path, mp)
                 with TIMER("write G-code"):
                     fast_map.write_gcode(pts, out_gcode, NOZZLE_OFFSET=mp["NOZZLE_OFFSET"])
+            if mp.get("LIMIT_AXIS_SPEEDS"):
+                from . import feed_limits
+                with TIMER("axis speed limits"):
+                    stats.update(feed_limits.apply(out_gcode, mp["MAX_SPEED_C"], mp["MAX_SPEED_B"], mp["MAX_SPEED_X"],
+                                                   mp["MAX_SPEED_Z"], nozzle_offset=mp["NOZZLE_OFFSET"]))
         if support_check:
             with TIMER("4. support check"):
                 from . import support_check as sc

@@ -40,6 +40,13 @@ MAP_DEFAULTS = dict(
     SMOOTH_EXTRUSION_MULTIPLIER=True,
     EXTRUSION_MULTIPLIER_RANGE=[0.5, 2.0],  # or null for no clamp
     SAFE_TRAVEL_TRANSITIONS=True,   # lower before printing after a travel that left the part; no extruding G00
+    # slow down any move that would drive an axis past these speeds (the notebook timed moves by the planar G-code
+    # only, asking for thousands of deg/s on C and B). Placeholders: set your machine's real limits
+    LIMIT_AXIS_SPEEDS=True,
+    MAX_SPEED_C=360,                # deg/s, bed rotation
+    MAX_SPEED_B=180,                # deg/s, nozzle tilt
+    MAX_SPEED_X=150,                # mm/s, radial
+    MAX_SPEED_Z=50,                 # mm/s
 )
 CURA_DEFAULTS = dict(
     config="cura_config.3mf",       # Cura project with the base profile (relative to the repo folder)
@@ -48,6 +55,7 @@ CURA_DEFAULTS = dict(
 )
 NOTEBOOK_EXACT = {"deform": {"DEFORMATION_METHOD": "notebook"},
                   "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False, "SAFE_TRAVEL_TRANSITIONS": False,
+                          "LIMIT_AXIS_SPEEDS": False,
                           "EXTRUSION_MULTIPLIER_RANGE": None},
                   "cura": {"strip_start_prime": False}}
 DEG_KEYS = {"MAX_POS_ROTATION", "MAX_NEG_ROTATION", "ROTATION_MAX_DELTA"}

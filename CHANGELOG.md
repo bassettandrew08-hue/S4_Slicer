@@ -6,6 +6,40 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
 
 ---
 
+## 2026-09-28: Realistic axis speeds
+
+### Fixed
+- **Moves far too fast for the machine** (seen in R-Theta Sim). Each G93 move got the time of its planar move
+  (planar length / Cura's feed), which ignores what the axes do to get the nozzle tip there:
+  - a 1° tilt swings X/Z ~0.7 mm through the nozzle offset
+  - a small move near the centre can need a big C rotation
+  - a travel lifted over the part is much longer in real space than in the planar file
+
+  The benchy asked for up to 21,000°/s on C while printing and 900,000°/s on travels. Now each move takes at least as
+  long as every axis needs at its speed limit (`s4/feed_limits.py`, after the G-code is written, so fast and
+  reference stay identical). The G94 `F20000` moves become G93 too, so every move has a definite time. Moves are
+  only slowed, never sped up. `--notebook-exact` leaves the feeds alone.
+
+### Added
+- **Settings `LIMIT_AXIS_SPEEDS`, `MAX_SPEED_C` (360°/s), `MAX_SPEED_B` (180°/s), `MAX_SPEED_X` (150 mm/s),
+  `MAX_SPEED_Z` (50 mm/s).** These are placeholders; set your machine's real limits. They're written to the sim
+  header, along with `estimated_print_time_min` and `moves_slowed_pct`.
+
+### Results (default settings)
+
+| model | estimated print time | moves slowed |
+|---|---|---|
+| Squirtle | 44 min | 50% |
+| benchy | 91 min (39 min at the old, impossible speeds) | 78% |
+| pi | 24 min | 66% |
+| dino | 56 min | 51% |
+| z mount | 54 min | 44% |
+| B-axis mount | 65 min | 47% |
+
+Only the timing changes. The toolpaths, supports and tilts are the same as before (pi 0 mm ungrounded, benchy 57 mm).
+
+---
+
 ## 2026-09-28: Nozzle tilt on every model (Squirtle had none)
 
 ### Fixed

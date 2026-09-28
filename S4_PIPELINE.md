@@ -230,6 +230,9 @@ Every section and key is optional; anything left out keeps its default.
 | `SMOOTH_EXTRUSION_MULTIPLIER` | true | smooth the extrusion compensation (section 8) |
 | `SPLIT_RETRACTIONS` | true | retract/unretract in place (section 8) |
 | `SAFE_TRAVEL_TRANSITIONS` | true | after a travel that left the part, lower before printing; rotation steps keep their own move's command (section 8) |
+| `LIMIT_AXIS_SPEEDS` | true | slow down any move that would drive an axis past the limits below (section 8) |
+| `MAX_SPEED_C`, `MAX_SPEED_B` | 360, 180 | deg/s, bed rotation and nozzle tilt. Placeholders: set your machine's real limits |
+| `MAX_SPEED_X`, `MAX_SPEED_Z` | 150, 50 | mm/s. Placeholders, as above |
 | `RETRACTION_LENGTH` | null | mm; `null` = use Cura's `retraction_amount` |
 
 ### `cura`: slicing
@@ -319,6 +322,7 @@ The rotation (tilt) field is the notebook's in every case.
 | start code | `strip_start_prime` | Cura's prime is dropped (it became a floating blob inside the part) |
 | travel re-entry | `SAFE_TRAVEL_TRANSITIONS` | after a travel that left the part, the nozzle lowers before printing (the notebook printed downward from the lifted point, drawing "poles"); rotation-split steps keep their own move's command; points mapped just below the bed are clamped to it instead of dropped |
 | nozzle offset | `NOZZLE_OFFSET` | taken from the profile (was hard-coded to 42) |
+| axis speeds | `LIMIT_AXIS_SPEEDS`, `MAX_SPEED_*` | each move's G93 time was its planar move's time, which ignores what the axes do: a 1° tilt swings X/Z ~0.7 mm, moves near the centre need big C rotations, travels lifted over the part are much longer than planned. Up to 900,000°/s on C. Now each move takes at least as long as every axis needs at its limit; the G94 `F20000` moves become G93 too |
 
 Why each of these was needed, with measurements, is in the [changelog](CHANGELOG.md).
 
