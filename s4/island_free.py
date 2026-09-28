@@ -35,6 +35,15 @@ DEFAULTS = dict(
     BARRIER_WEIGHT=0.02,         # beta
     FLIP_FREE_STAGES=10,
     FLIP_FREE_STAGE_ITERATIONS=150,
+    FIT_METHOD="penalty",        # "penalty": exact linear fit, then a soft fold penalty (robust on any mesh);
+                                 # "barrier": fold-free barrier + staged homotopy (strict, but can stall on fine meshes)
+    FOLD_PENALTY=100.0,          # penalty: strength
+    FOLD_PENALTY_DET=0.2,        # penalty: tets squashed below this volume ratio (or folded) are penalised
+    PENALTY_ITERATIONS=300,
+    LIFT_ITERATIONS=100,         # solver iterations per lifting round (warm-started)
+    SLIVER_QUALITY=0.03,         # barrier: tets with mean-ratio shape quality below this get no fold barrier
+    MICRO_TET_VOLUME=1e-3,       # barrier: ... nor do tets smaller than this fraction of the median tet volume
+    PRECOND_FLOOR=0.0,           # minimum per-vertex stiffness in the solver's preconditioner (x median)
 )
 
 
@@ -71,13 +80,27 @@ def _J(V, c, Dm_inv, t, out):
 
 
 @numba.njit(parallel=True, cache=True)
-def _tet_terms(V, cells, Dm_inv, vol, R, beta, e_out, dDs_out):
-    """Per-tet energy and dE/dDs. Returns False if any tet is flipped/degenerate."""
+def _tet_terms(V, cells, Dm_inv, vol, R, beta, guard, e_out, dDs_out):
+    """Per-tet energy and dE/dDs. Returns False if any guarded tet is flipped/degenerate.
+    Unguarded tets (slivers) get the rotation-fit term only: no barrier, no flip check."""
     n = cells.shape[0]
     bad = np.zeros(n, np.bool_)
     for t in numba.prange(n):
         J = np.empty((3, 3)); A = np.empty((3, 3))
         _J(V, cells[t], Dm_inv, t, J)
+        if not guard[t]:
+            ef = 0.0
+            for i in range(3):
+                for j in range(3):
+                    df = J[i, j] - R[t, i, j]; ef += df * df
+            e_out[t] = vol[t] * ef
+            for i in range(3):
+                for k in range(3):
+                    s = 0.0
+                    for j in range(3):
+                        s += vol[t] * 2.0 * (J[i, j] - R[t, i, j]) * Dm_inv[t, k, j]
+                    dDs_out[t, i, k] = s
+            continue
         d = _det3(J)
         if d <= 0.0:
             bad[t] = True
@@ -131,11 +154,15 @@ def _scatter(cells, dDs, n_points):
 
 
 @numba.njit(parallel=True, cache=True)
-def _max_step(V, D, cells, Dm_inv, tcap):
-    """Per tet: first t in (0, tcap] where det(J(V + t D)) hits 0 (tcap if none)."""
+def _max_step(V, D, cells, Dm_inv, guard, tcap, rho):
+    """Per guarded tet: first t in (0, tcap] where det(J(V + t D)) falls to rho * its current value (tcap if never).
+    rho = 0 is the flip point; rho > 0 keeps every step from squashing any tet by more than that factor."""
     n = cells.shape[0]
     out = np.empty(n)
     for t in numba.prange(n):
+        if not guard[t]:
+            out[t] = tcap
+            continue
         A = np.empty((3, 3)); B = np.empty((3, 3)); adjA = np.empty((3, 3)); adjB = np.empty((3, 3))
         _J(V, cells[t], Dm_inv, t, A)
         _J(D, cells[t], Dm_inv, t, B)
@@ -149,16 +176,17 @@ def _max_step(V, D, cells, Dm_inv, tcap):
         # find the first sign change of p(s) = c0 + c1 s + c2 s^2 + c3 s^3 on (0, tcap], then bisect
         best = tcap
         steps = 32
+        floor = rho * c0
         prev_s = 0.0; prev_p = c0
         for k in range(1, steps + 1):
             s = tcap * k / steps
             p = c0 + s * (c1 + s * (c2 + s * c3))
-            if p <= 0.0:
+            if p <= floor:
                 lo = prev_s; hi = s
                 for _ in range(40):
                     mid = 0.5 * (lo + hi)
                     pm = c0 + mid * (c1 + mid * (c2 + mid * c3))
-                    if pm > 0.0:
+                    if pm > floor:
                         lo = mid
                     else:
                         hi = mid
@@ -171,8 +199,16 @@ def _max_step(V, D, cells, Dm_inv, tcap):
 
 # --------------------------------------------------------------------------------------------- solver
 
+def mean_ratio(P, cells):
+    """Tet shape quality: 1 for a regular tet, -> 0 for a sliver (12 (3V)^(2/3) / sum of squared edge lengths)."""
+    a, b, c, d = (P[cells[:, k]] for k in range(4))
+    V = np.abs(np.einsum("ij,ij->i", np.cross(b - a, c - a), d - a)) / 6
+    L2 = sum(np.sum((x - y) ** 2, axis=1) for x, y in ((a, b), (a, c), (a, d), (b, c), (b, d), (c, d)))
+    return 12.0 * (3.0 * V) ** (2.0 / 3.0) / np.maximum(L2, 1e-300)
+
+
 class FitProblem:
-    def __init__(self, P0, cells, beta):
+    def __init__(self, P0, cells, beta, sliver_quality=0.0, step_rho=0.0, micro_volume=0.0, precond_floor=0.0):
         self.P0 = np.ascontiguousarray(P0, dtype=np.float64)
         self.cells = np.ascontiguousarray(cells, dtype=np.int64)
         a = self.P0[self.cells[:, 0]]
@@ -180,22 +216,33 @@ class FitProblem:
         self.Dm_inv = np.ascontiguousarray(np.linalg.inv(Dm))
         self.vol = np.abs(np.linalg.det(Dm)) / 6
         self.beta = float(beta)
+        self.step_rho = float(step_rho)
+        # slivers (mean ratio below sliver_quality) would pin the whole solve: a sub-micron move flips them
+        # micro-tets (tiny volume, from tiny STL triangles) likewise; together they hold a negligible share of the part
+        self.guard = np.ascontiguousarray((mean_ratio(self.P0, self.cells) >= sliver_quality)
+                                          & (self.vol >= micro_volume * np.median(self.vol)))
         self.n = len(self.P0)
         self.e = np.empty(len(self.cells))
         self.dDs = np.empty((len(self.cells), 3, 3))
         self.R = None
         self.lift_idx = np.zeros(0, np.int64); self.lift_t = np.zeros(0); self.lift_w = np.zeros(0)
         # stiffness (Hessian of sum vol |J|^2 per coordinate, /2)
-        Gi = np.swapaxes(self.Dm_inv, 1, 2)
+        Gi = self.Dm_inv  # rows of Dm^-1 are the basis-function gradients (J = Ds Dm^-1)
         G = np.concatenate([-Gi.sum(axis=1, keepdims=True), Gi], axis=1)
         Ke = self.vol[:, None, None] * np.einsum("nki,nli->nkl", G, G)
         c = self.cells
-        self.K = coo_matrix((Ke.ravel(), (np.repeat(c, 4, axis=1).ravel(), np.tile(c, (1, 4)).ravel())),
-                            shape=(self.n, self.n)).tocsc() + 1e-8 * identity(self.n, format="csc")
+        K = coo_matrix((Ke.ravel(), (np.repeat(c, 4, axis=1).ravel(), np.tile(c, (1, 4)).ravel())),
+                       shape=(self.n, self.n)).tocsc()
+        # Vertices attached only through near-flat micro-tets have almost no stiffness, and the preconditioned step
+        # blows up there (then the fold-free cap shrinks every step to ~nothing). Floor each vertex's stiffness.
+        self.K_raw = K
+        dK = K.diagonal()
+        floor = precond_floor * np.median(dK)
+        self.K = (K + diags(np.maximum(floor - dK, 0.0) + 1e-8 * np.median(dK))).tocsc()
 
     def energy_grad(self, x):
         V = x.reshape(-1, 3)
-        if not _tet_terms(V, self.cells, self.Dm_inv, self.vol, self.R, self.beta, self.e, self.dDs):
+        if not _tet_terms(V, self.cells, self.Dm_inv, self.vol, self.R, self.beta, self.guard, self.e, self.dDs):
             return np.inf, None
         E = float(np.sum(self.e))
         g = _scatter(self.cells, self.dDs, self.n)
@@ -206,7 +253,7 @@ class FitProblem:
         return E, g.ravel()
 
     def max_step(self, x, d):
-        return float(_max_step(x.reshape(-1, 3), np.ascontiguousarray(d.reshape(-1, 3)), self.cells, self.Dm_inv, 1.2).min())
+        return float(_max_step(x.reshape(-1, 3), np.ascontiguousarray(d.reshape(-1, 3)), self.cells, self.Dm_inv, self.guard, 1.2, self.step_rho).min())
 
     def preconditioner(self):
         scale = 2.0 * (1.0 + 2.0 * self.beta)
@@ -245,7 +292,7 @@ class FitProblem:
             d = -q
             if g @ d >= 0:
                 d = -H0(g); S, Y = [], []
-            t = min(1.0, 0.9 * self.max_step(x, d))
+            t = min(1.0, (1.0 if self.step_rho > 0 else 0.9) * self.max_step(x, d))
             for _ in range(40):
                 xn = x + t * d
                 En, gn = self.energy_grad(xn)
@@ -339,14 +386,24 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     q = {**DEFAULTS, **{k: p[k] for k in DEFAULTS if k in p}}
     t0 = time.perf_counter()
     P0 = np.asarray(points, dtype=np.float64)
-    prob = FitProblem(P0, cells, q["BARRIER_WEIGHT"])
     V = P0.copy(); iters = 0
-    stages = int(q["FLIP_FREE_STAGES"])
-    R = None
-    for k in range(1, stages + 1):
-        R = rotation_matrices(cell_centers, (k / stages) * rotation_field)
-        V, it = prob.solve(R, V, int(q["FLIP_FREE_STAGE_ITERATIONS"]))
-        iters += it
+    if q["FIT_METHOD"] == "penalty":
+        prob = PenaltyProblem(P0, cells, gamma=float(q["FOLD_PENALTY"]), eps=float(q["FOLD_PENALTY_DET"]),
+                              precond_floor=float(q["PRECOND_FLOOR"]))
+        R = rotation_matrices(cell_centers, rotation_field)
+        V = prob.linear_start(R)
+        V, iters = prob.solve(R, V, int(q["PENALTY_ITERATIONS"]))
+    elif q["FIT_METHOD"] == "barrier":
+        prob = FitProblem(P0, cells, q["BARRIER_WEIGHT"], sliver_quality=float(q["SLIVER_QUALITY"]),
+                          micro_volume=float(q["MICRO_TET_VOLUME"]), precond_floor=float(q["PRECOND_FLOOR"]))
+        stages = int(q["FLIP_FREE_STAGES"])
+        R = None
+        for k in range(1, stages + 1):
+            R = rotation_matrices(cell_centers, (k / stages) * rotation_field)
+            V, it = prob.solve(R, V, int(q["FLIP_FREE_STAGE_ITERATIONS"]))
+            iters += it
+    else:
+        raise ValueError(f"unknown FIT_METHOD {q['FIT_METHOD']!r} (use 'penalty' or 'barrier')")
     t_fit = time.perf_counter() - t0
     nbrs = vertex_graph(np.asarray(cells), len(P0))
     lifted = 0
@@ -359,15 +416,105 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
                 break
             tgt = np.maximum(tgt, np.where(need, h, -np.inf))
             idx = np.nonzero(np.isfinite(tgt))[0].astype(np.int64)
-            V, it = prob.solve(R, V, 300, lift=(idx, tgt[idx], np.full(len(idx), float(q["LIFT_WEIGHT"]))))
+            V, it = prob.solve(R, V, int(q["LIFT_ITERATIONS"]) if q["FIT_METHOD"] == "penalty" else 300,
+                               lift=(idx, tgt[idx], np.full(len(idx), float(q["LIFT_WEIGHT"]))))
             iters += it
             lifted = len(idx)
     seeds = island_seeds(V, nbrs)
-    a = V[np.asarray(cells)[:, 0]]
-    det = np.linalg.det(np.stack([V[np.asarray(cells)[:, k]] - a for k in (1, 2, 3)], axis=2))
+    c = np.asarray(cells)
+    J = np.stack([V[c[:, k]] - V[c[:, 0]] for k in (1, 2, 3)], axis=2) @ prob.Dm_inv
+    det = np.linalg.det(J)
+    U, _, Wt = np.linalg.svd(J)
+    flip = np.linalg.det(U @ Wt) < 0
+    U[flip, :, 2] *= -1
+    from scipy.spatial.transform import Rotation as _Rot
+    from .fast_map import tangential_vectors
+    about_t = np.degrees(np.einsum("ij,ij->i", _Rot.from_matrix(U @ Wt).as_rotvec(), tangential_vectors(cell_centers)))
+    want = np.degrees(rotation_field)
+    sel = np.abs(want) > 20.0
+    def _wmed(x, w):
+        o = np.argsort(x); cw = np.cumsum(w[o]); return float(x[o][np.searchsorted(cw, cw[-1] / 2)])
+    # tilt that matters for the B axis: rotation about the tangential axis, volume-weighted, where >20 deg is wanted
+    achieved = abs(_wmed(about_t[sel], prob.vol[sel])) if sel.any() else 0.0
+    wanted = abs(_wmed(want[sel], prob.vol[sel])) if sel.any() else 0.0
     info = {"seconds": round(time.perf_counter() - t0, 2), "fit_seconds": round(t_fit, 2), "iterations": iters,
-            "inverted_tets": int((det <= 0).sum()), "lifted_vertices": lifted, "island_seeds": len(seeds),
+            "inverted_tets": int((det <= 0).sum()),
+            "inverted_volume_pct": round(100.0 * float(prob.vol[det <= 0].sum() / prob.vol.sum()), 4),
+            "tilt_deg": round(achieved, 1), "target_tilt_deg": round(wanted, 1),
+            "lifted_vertices": lifted, "island_seeds": len(seeds),
             "island_mass": round(float(sum((d - b) * m for _, b, d, m in seeds)), 1)}
     if log:
         log(f"[deform] island-free: {info}")
+        if wanted > 5 and achieved < 0.7 * wanted:
+            log(f"[deform] WARNING: the deformation reached only {achieved:.0f} deg of the {wanted:.0f} deg tilt it aimed "
+                f"for (volume-weighted, where >20 deg is wanted). The nozzle will tilt too little; try FIT_METHOD \"penalty\".")
     return V, info
+
+
+# ---------------------------------------------------------------------- penalty (soft anti-fold) solver
+
+@numba.njit(parallel=True, cache=True)
+def _tet_terms_penalty(V, cells, Dm_inv, vol, R, gamma, eps, e_out, dDs_out):
+    """Per-tet energy vol * (|J - R|^2 + gamma * max(0, eps - det J)^2) and dE/dDs. Never infinite: folded tets
+    are pushed back open by the penalty instead of being forbidden (so no step-size cap is needed)."""
+    n = cells.shape[0]
+    for t in numba.prange(n):
+        J = np.empty((3, 3)); A = np.empty((3, 3))
+        _J(V, cells[t], Dm_inv, t, J)
+        d = _det3(J)
+        _adj3(J, A)               # adj(J); d det / dJ = adj(J)^T
+        viol = eps - d
+        ef = 0.0
+        for i in range(3):
+            for j in range(3):
+                df = J[i, j] - R[t, i, j]; ef += df * df
+        pen = viol * viol if viol > 0.0 else 0.0
+        e_out[t] = vol[t] * (ef + gamma * pen)
+        G = np.empty((3, 3))
+        for i in range(3):
+            for j in range(3):
+                g = 2.0 * (J[i, j] - R[t, i, j])
+                if viol > 0.0:
+                    g -= 2.0 * gamma * viol * A[j, i]
+                G[i, j] = vol[t] * g
+        for i in range(3):
+            for k in range(3):
+                s = 0.0
+                for j in range(3):
+                    s += G[i, j] * Dm_inv[t, k, j]
+                dDs_out[t, i, k] = s
+
+
+class PenaltyProblem(FitProblem):
+    """Same fit as FitProblem, with a soft fold penalty instead of the barrier (robust on meshes with slivers)."""
+
+    def __init__(self, P0, cells, gamma=100.0, eps=0.2, precond_floor=0.2):
+        super().__init__(P0, cells, 0.0, precond_floor=precond_floor)
+        self.gamma = float(gamma); self.eps = float(eps)
+
+    def energy_grad(self, x):
+        V = x.reshape(-1, 3)
+        _tet_terms_penalty(V, self.cells, self.Dm_inv, self.vol, self.R, self.gamma, self.eps, self.e, self.dDs)
+        E = float(np.sum(self.e))
+        g = _scatter(self.cells, self.dDs, self.n)
+        if len(self.lift_idx):
+            dz = V[self.lift_idx, 2] - self.lift_t
+            E += float(np.sum(self.lift_w * dz * dz))
+            np.add.at(g[:, 2], self.lift_idx, 2.0 * self.lift_w * dz)
+        return E, g.ravel()
+
+    def max_step(self, x, d):
+        return 1.2  # no hard constraint
+
+    def linear_start(self, R):
+        """Exact minimiser of the fit term alone (sum vol |J - R|^2): the starting point."""
+        Gi = self.Dm_inv  # rows of Dm^-1 are the basis-function gradients (J = Ds Dm^-1)
+        G = np.concatenate([-Gi.sum(axis=1, keepdims=True), Gi], axis=1)
+        T = self.vol[:, None, None] * R
+        B = np.einsum("nij,nkj->nki", T, G)
+        b = np.zeros((self.n, 3))
+        for k in range(4):
+            np.add.at(b, self.cells[:, k], B[:, k, :])
+        K = self.K_raw
+        lu = splu((K + 1e-9 * np.median(K.diagonal()) * identity(self.n, format="csc")).tocsc())
+        return np.column_stack([lu.solve(b[:, k] + 1e-9 * self.P0[:, k]) for k in range(3)])

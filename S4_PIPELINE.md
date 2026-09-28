@@ -125,7 +125,7 @@ A run prints these lines, in order:
 | line | tells you |
 |---|---|
 | `[params]` | which profile file and overrides were used |
-| `[deform]` | the deformation's own check (inverted tets, island seeds left) and where the deformed STL went |
+| `[deform]` | the deformation's own check: tilt achieved vs aimed for (`tilt_deg` / `target_tilt_deg`), folded tets and their volume, island seeds left. It prints a WARNING if the tilt falls well short |
 | `[slice]` | the key Cura values actually used (layer height, line width, retraction, flavor, ...) |
 | `[support]` | plastic that would be printed in mid-air, by kind (see below) |
 | `[quality]` | poles: extrusion dragged more than 2 mm straight down from a travel (should always say "none"), and steep extruding segments (informational) |
@@ -209,8 +209,12 @@ Every section and key is optional; anything left out keeps its default.
 | `DEFORMATION_METHOD` | `island_free` | how the tilt field becomes a deformed shape: `island_free` (section 7) or `notebook` |
 | `ISLAND_LIFT_SLOPE` | 0.5 | `island_free`: every point must be reachable from the bed rising at least this much per mm. Higher = stricter (1.0 ≈ 45° overhangs) but more distortion |
 | `ISLAND_LIFT_ROUNDS` | 5 | `island_free`: rounds of lifting |
-| `FLIP_FREE_STAGES`, `FLIP_FREE_STAGE_ITERATIONS` | 10, 150 | `island_free`: the tilt is applied in this many steps; fewer = faster but less accurate |
-| `BARRIER_WEIGHT`, `LIFT_WEIGHT` | 0.02, 5 | `island_free`: strength of the anti-fold barrier and of the lift targets |
+| `FIT_METHOD` | `penalty` | `island_free`: `penalty` (robust on any mesh) or `barrier` (strictly fold-free, but can stall on fine meshes) |
+| `FOLD_PENALTY`, `FOLD_PENALTY_DET` | 100, 0.2 | `penalty`: how hard tets squashed below 0.2× volume (or folded) are pushed back |
+| `PENALTY_ITERATIONS`, `LIFT_ITERATIONS` | 300, 100 | `penalty`: solver iterations for the fit, and per lifting round |
+| `LIFT_WEIGHT` | 5 | `island_free`: strength of the lift targets |
+| `FLIP_FREE_STAGES`, `FLIP_FREE_STAGE_ITERATIONS`, `BARRIER_WEIGHT` | 10, 150, 0.02 | `barrier` only: tilt ramp stages and barrier strength |
+| `SLIVER_QUALITY`, `MICRO_TET_VOLUME` | 0.03, 1e-3 | `barrier` only: badly shaped or tiny tets get no barrier (they would stall it) |
 
 ### `map`: the machine and the final 4-axis moves (notebook cells 17–18)
 | setting | default | what it does |
@@ -281,8 +285,9 @@ change that affects output, add an entry to [CHANGELOG.md](CHANGELOG.md).
 **The deformation (`island_free`, default).** Cura slices the deformed shape flat. Any local low point of that shape,
 a spot lower than everything around it that isn't on the bed, starts printing in mid-air. `island_free` keeps the
 notebook's tilt field but builds the shape in two steps:
-- **fold-free fit:** each tet is fitted to its target rotation, plus a barrier term that stops any tet turning inside
-  out. The tilt is applied in stages (`FLIP_FREE_STAGES`).
+- **fit:** first the exact least-squares fit of every tet to its target rotation (a single sparse solve), then a soft
+  penalty pushes open any tet that was squashed or folded (`FIT_METHOD: penalty`). `FIT_METHOD: barrier` forbids
+  folds outright instead, but it can stall on fine meshes.
 - **lifting:** vertices that can't be reached from the bed by a path rising at least `ISLAND_LIFT_SLOPE` per mm get
   height targets, and the fit is solved again. Those regions then print later, growing out from where they're
   attached.

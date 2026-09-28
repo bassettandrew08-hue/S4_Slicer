@@ -30,6 +30,14 @@ DEFAULT_PARAMS = dict(
     BARRIER_WEIGHT=0.02,
     FLIP_FREE_STAGES=10,
     FLIP_FREE_STAGE_ITERATIONS=150,
+    FIT_METHOD="penalty",          # island_free: "penalty" (robust, default) or "barrier" (strictly fold-free)
+    FOLD_PENALTY=100.0,            # penalty: strength of the soft anti-fold term
+    FOLD_PENALTY_DET=0.2,          # penalty: tets squashed below this volume ratio are penalised
+    PENALTY_ITERATIONS=300,
+    LIFT_ITERATIONS=100,           # island_free: solver iterations per lifting round
+    SLIVER_QUALITY=0.03,           # barrier: badly shaped tets get no fold barrier (they would stall the solve)
+    MICRO_TET_VOLUME=1e-3,         # barrier: nor do tets below this fraction of the median volume
+    PRECOND_FLOOR=0.0,             # solver preconditioner stiffness floor (x median)
 )
 
 

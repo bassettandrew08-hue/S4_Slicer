@@ -6,6 +6,41 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
 
 ---
 
+## 2026-09-28: Nozzle tilt on every model (Squirtle had none)
+
+### Fixed
+- **No nozzle tilt on Squirtle.** Its B stayed within ±1.5°, so it printed essentially flat, with islands. The
+  fold-free solver stalled after moving vertices about 0.3 mm. There were two causes:
+  - **A bug in the solver's preconditioner** (the stiffness matrix that steers each step). It was built with each
+    tet's basis-function gradients transposed: the columns of `Dm⁻¹` instead of its rows. The energy and gradient
+    were right, so results were valid, just badly steered. That was harmless on simple meshes and crippling on
+    Squirtle's fine, irregular one: 115k tets, 11% of them micro-tets.
+  - **The hard fold barrier.** On meshes with slivers and micro-tets, a few tets pin every step.
+- **New default `FIT_METHOD: "penalty"`.** Start from the exact least-squares fit (one sparse solve, which reaches the
+  target tilt), then a soft penalty pushes open any tet squashed below 0.2× volume or folded. There's no step cap,
+  so nothing can jam. The old method is `FIT_METHOD: "barrier"`, now with a correct preconditioner and optional
+  sliver/micro-tet exemptions.
+
+### Added
+- **`[deform]` now reports the tilt achieved against the tilt aimed for:** volume-weighted rotation about the B axis,
+  where more than 20° is wanted. It warns if the tilt falls short, so a stalled deformation can't pass silently again.
+  It also reports the folded volume share.
+
+### Results (default settings)
+
+| model | tilt achieved / aimed | B range | ungrounded extrusion | folded volume |
+|---|---|---|---|---|
+| Squirtle | 24.8° / 27.7° | −49° … +22° (was −1.5° … +0.4°) | 2 mm (was 62 mm) | 0.0007% |
+| benchy | 48.8° / 52.0° | −111° … +15° | 64 mm | 0% |
+| pi | 39.4° / 39.8° | −66° … +14° | 7 mm | 0% |
+| dino | 22.5° / 30.1° | −51° … 0° | 43 mm | 0% |
+| z mount | 27.1° / 32.2° | −72° … +12° | 2 mm | 0% |
+| B-axis mount | 34.3° / 33.4° | −77° … +4° | 2 mm | 0% |
+
+Squirtle's deformation takes about 85 s. No model has poles.
+
+---
+
 ## 2026-09-27: Settings block for R-Theta Sim
 
 ### Added
