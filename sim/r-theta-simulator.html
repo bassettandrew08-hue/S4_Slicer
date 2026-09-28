@@ -1,0 +1,1774 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R-Theta Sim · Core R-Theta 4-axis print simulator</title>
+<!--
+  R-Theta Sim: G-code simulator and preflight checker for the Core R-Theta 4-axis
+  non-planar printer (C/X/Z/B/E G-code from the S4 slicer pipeline).
+  Single file, no build step. Needs three.js r128 from cdnjs.
+-->
+<style>
+:root {
+  --bg: #0f1318; --panel: #141920; --panel-2: #1a2028; --raise: #212831; --raise-2: #28303a;
+  --line: #262e38; --line-2: #333d49;
+  --text: #e3e8ee; --muted: #8b97a4; --faint: #5d6977;
+  --accent: #4fd1c5; --accent-ink: #062320; --accent-soft: rgba(79, 209, 197, 0.14);
+  --warn: #f5b942; --err: #ff6b6b; --ok: #5fd39a; --info: #9fb3c8; --purple: #b98bff;
+  --mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --r: 8px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13.5px/1.45 var(--sans); -webkit-font-smoothing: antialiased; }
+button, select, input { font: inherit; color: inherit; }
+::selection { background: var(--accent-soft); }
+
+/* buttons */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--raise); border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 11px; cursor: pointer; white-space: nowrap; transition: background 0.12s, border-color 0.12s; }
+.btn:hover { background: var(--raise-2); border-color: #45505d; }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.btn.primary:hover { background: #67dcd1; border-color: #67dcd1; }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn.ghost:hover { color: var(--text); background: var(--raise); }
+.btn.icon { width: 32px; height: 32px; padding: 0; }
+.btn.sm { padding: 3px 9px; font-size: 12px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select, input[type=number] { background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; padding: 5px 8px; }
+select:hover, input[type=number]:hover { border-color: #45505d; }
+
+/* toggles */
+label.tog { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; cursor: pointer; }
+label.tog input { appearance: none; -webkit-appearance: none; width: 32px; height: 18px; border-radius: 999px; background: var(--raise-2); border: 1px solid var(--line-2); position: relative; cursor: pointer; flex: none; transition: background 0.15s; margin: 0; }
+label.tog input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #9aa6b3; transition: transform 0.15s, background 0.15s; }
+label.tog input:checked { background: var(--accent-soft); border-color: var(--accent); }
+label.tog input:checked::after { transform: translateX(14px); background: var(--accent); }
+
+/* layout */
+.app { display: grid; height: 100vh; grid-template-columns: 248px minmax(0, 1fr) 356px; grid-template-rows: 52px minmax(0, 1fr) 54px; grid-template-areas: "top top top" "left view right" "left transport right"; }
+.top { grid-area: top; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.brand { display: flex; align-items: center; gap: 9px; margin-right: 10px; }
+.brand svg { flex: none; }
+.brand b { font-size: 14px; font-weight: 650; letter-spacing: 0.01em; }
+.brand span { color: var(--muted); font-size: 12px; }
+#filename { font-family: var(--mono); font-size: 12px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: auto; }
+aside { overflow-y: auto; background: var(--panel); scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+aside.left { grid-area: left; border-right: 1px solid var(--line); padding: 6px 14px 16px; }
+aside.right { grid-area: right; border-left: 1px solid var(--line); padding: 6px 0 16px; }
+.sec { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.sec:last-child { border-bottom: 0; }
+.sec h2, details > summary { font-size: 11.5px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+details { padding: 0 16px; border-bottom: 1px solid var(--line); }
+details > summary { list-style: none; cursor: pointer; padding: 12px 0; margin: 0; display: flex; align-items: center; justify-content: space-between; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::after { content: ""; width: 7px; height: 7px; border-right: 1.5px solid var(--faint); border-bottom: 1.5px solid var(--faint); transform: rotate(-45deg); transition: transform 0.15s; margin-right: 3px; }
+details[open] > summary::after { transform: rotate(45deg); }
+details > .body { padding-bottom: 14px; }
+.muted { color: var(--muted); font-size: 12.5px; }
+.faint { color: var(--faint); font-size: 12px; }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.row + .row { margin-top: 8px; }
+.field { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
+.field label { color: var(--muted); }
+
+/* viewport */
+#viewport { grid-area: view; position: relative; min-height: 0; overflow: hidden; background: radial-gradient(ellipse 80% 70% at 50% 38%, #27313c 0%, #182028 55%, #10151b 100%); }
+#viewport canvas { display: block; touch-action: none; }
+#viewport.drop::after { content: "Drop G-code to load"; position: absolute; inset: 12px; border: 2px dashed var(--accent); border-radius: 12px; display: grid; place-items: center; font-size: 17px; background: rgba(10, 16, 22, 0.7); }
+.hud { position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; pointer-events: none; }
+#mode { font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; background: rgba(15, 19, 24, 0.75); border: 1px solid var(--line-2); color: var(--muted); }
+#mode[data-state=playing] { color: var(--accent); border-color: rgba(79, 209, 197, 0.5); }
+#mode[data-state=jogging] { color: var(--warn); border-color: rgba(245, 185, 66, 0.5); }
+#kinwarn { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); max-width: min(560px, 70%); background: rgba(245, 185, 66, 0.12); border: 1px solid rgba(245, 185, 66, 0.6); color: #ffe2a0; border-radius: var(--r); padding: 7px 12px; font-size: 12.5px; backdrop-filter: blur(6px); }
+#empty { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(20, 25, 32, 0.92); border: 1px solid var(--line-2); border-radius: 14px; padding: 22px 24px; width: min(400px, 90%); backdrop-filter: blur(8px); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4); }
+#empty h3 { margin: 0 0 6px; font-size: 16px; }
+#empty p { margin: 0 0 16px; color: var(--muted); }
+#toast { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); max-width: min(620px, 86%); background: #0d1115; border: 1px solid var(--line-2); border-radius: var(--r); padding: 9px 14px; font-size: 12.5px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); }
+#legend { position: absolute; right: 12px; bottom: 12px; width: 250px; background: rgba(15, 19, 24, 0.78); border: 1px solid var(--line); border-radius: var(--r); padding: 9px 11px; font-size: 11.5px; color: var(--muted); pointer-events: none; backdrop-filter: blur(6px); }
+.lg-t { color: var(--text); font-weight: 600; margin-bottom: 5px; }
+.lg-bar { height: 7px; border-radius: 4px; }
+.lg-lab { display: flex; justify-content: space-between; margin: 3px 0 7px; font-family: var(--mono); font-size: 10.5px; }
+.lg-keys { display: flex; flex-wrap: wrap; gap: 3px 10px; }
+.lg-keys + .lg-keys { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line); }
+.lg-keys i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+.lg-keys i.dot { width: 8px; height: 8px; border-radius: 50%; }
+.lg-t + .lg-keys i { height: 10px; width: 10px; border-radius: 2px; }
+#inspect { position: absolute; left: 12px; bottom: 12px; width: min(430px, calc(100% - 290px)); min-width: 260px; background: rgba(20, 25, 32, 0.95); border: 1px solid var(--line-2); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35); backdrop-filter: blur(8px); }
+#inspect .ih { display: flex; justify-content: space-between; align-items: baseline; }
+#inspect .icode { font-family: var(--mono); font-size: 11.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; overflow-x: auto; white-space: pre; }
+
+/* transport */
+.transport { grid-area: transport; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-top: 1px solid var(--line); background: var(--panel); }
+#play { width: 36px; height: 36px; border-radius: 50%; padding: 0; }
+.transport .t { font-family: var(--mono); font-size: 12px; color: var(--muted); min-width: 58px; text-align: center; }
+#scrub { flex: 1; min-width: 80px; accent-color: var(--accent); height: 4px; }
+#moveinfo { font-family: var(--mono); font-size: 11.5px; color: var(--faint); min-width: 150px; text-align: right; }
+.transport select { padding: 4px 6px; }
+
+/* readouts */
+.readout { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; font-size: 12.5px; }
+.readout .rk { color: var(--muted); }
+.readout .rv { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+.readout .rs { font-family: var(--mono); color: var(--faint); font-size: 11px; text-align: right; align-self: center; }
+#gcode { font-family: var(--mono); font-size: 11.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 5px 0; overflow: hidden; }
+.gl { white-space: pre; overflow: hidden; text-overflow: ellipsis; padding: 1px 9px; color: var(--faint); }
+.gl span { display: inline-block; width: 54px; color: #47525e; }
+.gl.cur { background: var(--accent-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+
+/* jog */
+.jog { display: grid; grid-template-columns: 22px 1fr 1fr; gap: 5px; align-items: center; margin-top: 8px; }
+.jog b { font-family: var(--mono); font-weight: 600; color: var(--muted); }
+.jog .btn { padding: 6px 0; font-family: var(--mono); }
+.homes { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 8px; }
+
+/* checks */
+.pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 9px; font-size: 11.5px; margin: 0 4px 5px 0; border: 1px solid; background: transparent; cursor: default; }
+.pill.err { color: var(--err); border-color: rgba(255, 107, 107, 0.55); } .pill.warn { color: var(--warn); border-color: rgba(245, 185, 66, 0.55); }
+.pill.info { color: var(--info); border-color: rgba(159, 179, 200, 0.5); } .pill.ok { color: var(--ok); border-color: rgba(95, 211, 154, 0.55); }
+button.pill { cursor: pointer; }
+button.pill:hover { background: rgba(255, 255, 255, 0.05); }
+button.pill.on { background: rgba(255, 255, 255, 0.09); box-shadow: inset 0 0 0 1px currentColor; }
+#checksum { margin: 0 0 10px; }
+#issues { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.issue { text-align: left; display: flex; flex-direction: column; gap: 1px; background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid; border-radius: 6px; padding: 6px 9px; font-size: 12px; cursor: pointer; }
+.issue:hover { background: var(--raise); }
+.issue b { font-family: var(--mono); font-weight: 500; font-size: 11.5px; }
+.issue.err { border-left-color: var(--err); } .issue.warn { border-left-color: var(--warn); } .issue.info { border-left-color: var(--info); }
+#copylines { align-self: flex-start; margin-bottom: 4px; }
+#convresult { margin-top: 10px; }
+.conv { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 6px 9px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; margin-bottom: 4px; font-size: 12px; }
+.conv b { font-family: var(--mono); font-weight: 500; }
+.conv em { color: var(--muted); font-style: normal; }
+.conv.best { border-color: rgba(95, 211, 154, 0.6); background: rgba(95, 211, 154, 0.07); }
+
+/* overlays */
+#busy { position: fixed; inset: 0; background: rgba(8, 11, 14, 0.6); display: grid; place-items: center; z-index: 20; backdrop-filter: blur(2px); }
+#busy > div { background: var(--panel); border: 1px solid var(--line-2); border-radius: 12px; padding: 18px 20px; width: 310px; }
+.bar { height: 5px; background: var(--bg); border-radius: 3px; margin-top: 12px; overflow: hidden; }
+#busybar { height: 100%; width: 0; background: var(--accent); transition: width 0.1s; }
+#settings { position: fixed; inset: 0; z-index: 15; background: rgba(8, 11, 14, 0.55); display: flex; justify-content: flex-end; }
+#settings .sheet { width: min(540px, 100%); height: 100%; background: var(--panel); border-left: 1px solid var(--line-2); display: flex; flex-direction: column; box-shadow: -20px 0 50px rgba(0, 0, 0, 0.35); }
+#settings .shead { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+#settings .shead h2 { margin: 0 auto 0 0; font-size: 15px; }
+#settingsform { overflow-y: auto; padding: 4px 16px 20px; }
+fieldset { border: 0; padding: 0; margin: 16px 0 0; }
+legend { font-size: 11.5px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 0 0 4px; }
+.srow { display: grid; grid-template-columns: 1fr 200px; gap: 3px 12px; padding: 8px 0; border-bottom: 1px solid var(--line); align-items: center; }
+.srow label { font-size: 13px; }
+.sin { display: flex; align-items: center; gap: 6px; }
+.sin input[type=number], .sin select { width: 100%; min-width: 0; }
+.unit { color: var(--faint); font-size: 11.5px; white-space: nowrap; min-width: 48px; }
+.hint { grid-column: 1 / -1; color: var(--faint); font-size: 11.5px; }
+.hint.ph { color: #caa85a; }
+.sfoot { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.sfoot .primary { margin-left: auto; }
+.filebtn { position: relative; overflow: hidden; }
+.filebtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+kbd { font-family: var(--mono); font-size: 10.5px; background: var(--raise); border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+h3.sub { font-size: 12px; font-weight: 600; color: var(--text); margin: 12px 0 6px; }
+h3.sub:first-child { margin-top: 0; }
+.readout .rv.wrap { white-space: normal; overflow-wrap: anywhere; }
+details.inner { padding: 0; border: 0; margin-top: 6px; }
+details.inner > summary { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 12px; color: var(--accent); padding: 6px 0; justify-content: flex-start; gap: 8px; }
+details.inner > summary::after { order: -1; margin: 0 2px 0 0; }
+#slicer #copyspec { margin: 2px 0 6px; }
+[hidden] { display: none !important; }
+@media (max-width: 1080px) {
+  .app { height: auto; grid-template-columns: 1fr; grid-template-rows: 52px 62vh 54px auto auto; grid-template-areas: "top" "view" "transport" "right" "left"; }
+  aside.left, aside.right { border: 0; border-top: 1px solid var(--line); }
+  #moveinfo, .brand span { display: none; }
+  #legend { width: 210px; }
+  #inspect { width: calc(100% - 24px); bottom: auto; top: 50px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="15" r="7.5" fill="none" stroke="#4fd1c5" stroke-width="1.6"/><ellipse cx="12" cy="15" rx="7.5" ry="2.4" fill="#4fd1c5" opacity=".25"/><path d="M15 3.5l-2.2 7.8" stroke="#e3e8ee" stroke-width="2" stroke-linecap="round"/><circle cx="12.6" cy="12" r="1.3" fill="#f5b942"/></svg>
+      <b>R-Theta Sim</b><span>Core R-Theta 4-axis</span>
+    </div>
+    <div id="filename">No file loaded</div>
+    <button class="btn primary" data-open>Open G-code</button>
+    <button class="btn" data-demo>Demo</button>
+    <button class="btn icon" id="opensettings" aria-label="Settings" title="Settings"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11.3 1.5l.4 2.2c.6.2 1.1.5 1.6.9l2.1-.8 1.3 2.3-1.7 1.4c.1.6.1 1.2 0 1.8l1.7 1.4-1.3 2.3-2.1-.8c-.5.4-1 .7-1.6.9l-.4 2.2H8.7l-.4-2.2c-.6-.2-1.1-.5-1.6-.9l-2.1.8-1.3-2.3L5 10.1c-.1-.6-.1-1.2 0-1.8L3.3 6.9l1.3-2.3 2.1.8c.5-.4 1-.7 1.6-.9l.4-2.2h2.6zM10 7a3 3 0 100 6 3 3 0 000-6z"/></svg></button>
+    <input type="file" id="file" accept=".gcode,.gco,.g,.nc,.txt" hidden>
+  </header>
+
+  <aside class="left">
+    <div class="sec">
+      <h2>View</h2>
+      <label class="tog">Hold the bed still <input type="checkbox" id="bedframe"></label>
+      <label class="tog">Follow the nozzle <input type="checkbox" id="follow"></label>
+      <label class="tog">Printed plastic <input type="checkbox" id="showbeads" checked></label>
+      <label class="tog">Upcoming path <input type="checkbox" id="showpreview" checked></label>
+      <div class="field"><label for="colormode">Color by</label>
+        <select id="colormode"><option value="tilt">Nozzle tilt (B)</option><option value="flow">Plastic per mm</option><option value="support">Support check</option><option value="height">Height</option><option value="solid">Filament</option></select>
+      </div>
+      <p class="faint">Click plastic to see its G-code line. Drag to orbit, right-drag to pan, scroll to zoom.</p>
+    </div>
+    <div class="sec">
+      <h2>Jog and home</h2>
+      <div class="field"><label for="jogstep">Step</label>
+        <select id="jogstep"><option value="0.1">0.1 mm / °</option><option value="1">1 mm / °</option><option value="10" selected>10 mm / °</option><option value="45">45 mm / °</option></select>
+      </div>
+      <div class="jog">
+        <b>X</b><button class="btn" data-jog="X:-1">−</button><button class="btn" data-jog="X:1">+</button>
+        <b>Z</b><button class="btn" data-jog="Z:-1">−</button><button class="btn" data-jog="Z:1">+</button>
+        <b>B</b><button class="btn" data-jog="B:-1">−</button><button class="btn" data-jog="B:1">+</button>
+        <b>C</b><button class="btn" data-jog="C:-1">−</button><button class="btn" data-jog="C:1">+</button>
+      </div>
+      <div class="homes">
+        <button class="btn" data-home="X">Home X</button><button class="btn" data-home="Z">Home Z</button>
+        <button class="btn" data-home="B">Home B</button><button class="btn" data-home="all">Home all</button>
+      </div>
+      <div class="row" style="margin-top:8px"><button class="btn ghost" id="resume" style="width:100%">Back to file position</button></div>
+      <p class="faint">Moves only the virtual machine, within the limits in Settings.</p>
+    </div>
+    <div class="sec">
+      <h2>Shortcuts</h2>
+      <p class="faint"><kbd>Space</kbd> play or pause · <kbd>←</kbd> <kbd>→</kbd> step one move · <kbd>Esc</kbd> close settings</p>
+    </div>
+  </aside>
+
+  <div id="viewport">
+    <div class="hud"><span id="mode" data-state="nofile">No file</span></div>
+    <div id="kinwarn" hidden>Firmware matrix differs from the mechanism. The view shows where the machine would really go with that config.</div>
+    <div id="empty">
+      <h3>Load a print</h3>
+      <p>Open G-code from your S4 pipeline, or try the demo cup. You can also drop a file anywhere on this view.</p>
+      <div class="row"><button class="btn primary" data-open>Open G-code</button><button class="btn" data-demo>Load demo</button></div>
+    </div>
+    <div id="toast" hidden></div>
+    <div id="legend"></div>
+    <div id="inspect" hidden><div id="inspectbody"></div><div class="row"><button id="inspectjump" class="btn primary sm">Jump here</button><button id="inspectclose" class="btn sm">Close</button></div></div>
+  </div>
+
+  <div class="transport">
+    <button id="play" class="btn primary" aria-label="Play"></button>
+    <button id="stepb" class="btn icon ghost" aria-label="Previous move" title="Previous move (←)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 3h2v10H3zM13 3v10L6 8z" fill="currentColor"/></svg></button>
+    <button id="stepf" class="btn icon ghost" aria-label="Next move" title="Next move (→)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M11 3h2v10h-2zM3 3v10l7-5z" fill="currentColor"/></svg></button>
+    <button id="restart" class="btn icon ghost" aria-label="Restart" title="Restart"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 3a5 5 0 11-4.6 3H1.5L4.5 2.5 7.5 6H5.6A3.2 3.2 0 108 4.8z" fill="currentColor"/></svg></button>
+    <span class="t" id="tnow">0:00</span>
+    <input type="range" id="scrub" min="0" max="10000" value="0" aria-label="Print timeline">
+    <span class="t" id="ttot">0:00</span>
+    <select id="speed" aria-label="Playback speed">
+      <option value="1">1×</option><option value="2">2×</option><option value="5">5×</option>
+      <option value="10" selected>10×</option><option value="25">25×</option><option value="50">50×</option>
+      <option value="100">100×</option><option value="250">250×</option><option value="1000">1000×</option>
+    </select>
+    <span id="moveinfo"></span>
+  </div>
+
+  <aside class="right">
+    <details open><summary>Machine position</summary><div class="body"><div class="readout" id="readout"></div></div></details>
+    <details open><summary>Current G-code</summary><div class="body"><div id="gcode"><div class="gl">&nbsp;</div></div></div></details>
+    <details open><summary>File</summary><div class="body"><div class="readout" id="stats"></div></div></details>
+    <details open><summary>Slicer settings</summary><div class="body" id="slicer"></div></details>
+    <details open><summary>Preflight check</summary><div class="body">
+      <p class="muted" id="checksum"></p>
+      <button id="runcheck" class="btn primary">Run preflight check</button>
+      <div id="issues"></div>
+    </div></details>
+    <details><summary>G-code conventions</summary><div class="body">
+      <p class="muted">Tries every way the X, Z, and B values could be read and scores how much plastic ends up floating under each.</p>
+      <button id="findconv" class="btn">Find the right conventions</button>
+      <div id="convresult"></div>
+    </div></details>
+  </aside>
+</div>
+
+<div id="settings" hidden>
+  <div class="sheet" role="dialog" aria-label="Printer settings">
+    <div class="shead"><h2>Printer settings</h2><button id="closesettings" class="btn">Close</button></div>
+    <div id="settingsform"></div>
+    <div class="sfoot">
+      <button id="resetsettings" class="btn">Reset to defaults</button>
+      <button id="exportsettings" class="btn">Save to file</button>
+      <label class="filebtn btn">Load from file<input type="file" id="importsettings" accept=".json"></label>
+      <button id="applysettings" class="btn primary">Apply</button>
+    </div>
+  </div>
+</div>
+
+<div id="busy" hidden><div><div id="busytext">Working</div><div class="bar"><div id="busybar"></div></div></div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ===== Core R-Theta simulator: pure logic (no DOM, no three.js) =====
+// Axis state layout per point: [X, Z, B, C, E]
+
+const DEFAULTS = {
+  // Geometry
+  nozzleOffset: 41.5,
+  xzRef: 'tipAtB0',
+  bSign: 1,
+  cSign: 1,
+  bedDiameter: 200,
+  xMin: -10, xMax: 140,
+  zMin: -40, zMax: 200,
+  bMin: -100, bMax: 40,
+  homeX: 140, homeZ: 200, homeB: 0,
+  // Motion
+  feedMode: 'linear',
+  vX: 200, vZ: 12, vB: 360, vC: 720, vE: 60,
+  aX: 2000, aZ: 200, aB: 5000, aC: 3000, aE: 3000,
+  jerk: 8,
+  g0Inverse: 'inverse',
+  homeSpeed: 40,
+  // Drive
+  bPulleyTeeth: 16,
+  xySteps: 100,
+  zSteps: 400,
+  cStepsPerDeg: 22.222,
+  m11: 1, m12: 1, m21: 1, m22: -1,
+  kinCheck: false,
+  f11: 1, f12: 1, f21: 1, f22: -1,
+  // Head (collision)
+  shaftR: 1.2,
+  ignoreTip: 3,
+  bodyStart: 18,
+  bodyLen: 14,
+  bodyR: 11,
+  ignoreRecent: 25,
+  // Support check
+  layerH: 0.25,
+  supportSkip: 40,
+  floatMinRun: 6,
+  blobRatio: 0.5,
+  // Filament and flow
+  filamentDia: 1.75,
+  filamentDensity: 1.24,
+  maxFlow: 12,
+  flowHigh: 2,
+  flowLow: 0.5,
+  overhangMinRun: 1,
+  // Display
+  beadWidth: 0.45,
+  beadArcDeg: 3,
+};
+
+const SCHEMA = [
+  { group: 'Geometry', items: [
+    ['nozzleOffset', 'B pivot to nozzle tip', 'mm', 'S4 notebook value (41.5). Measure yours.'],
+    ['xzRef', 'G-code X/Z describe', 'select', 'Tip at B=0 is what the S4 output assumes; switch if the part looks warped.', [['tipAtB0','Tip position when B = 0'],['pivot','B pivot position'],['tip','Nozzle tip directly']]],
+    ['bSign', 'B direction', 'select', 'Flip if tilted walls lean the wrong way.', [['1','Normal'],['-1','Reversed']]],
+    ['cSign', 'C direction', 'select', 'Flip if the part comes out mirrored.', [['1','Normal'],['-1','Reversed']]],
+    ['bedDiameter', 'Bed diameter', 'mm', 'Placeholder'],
+    ['xMin', 'X (radius) min', 'mm', 'Placeholder'], ['xMax', 'X (radius) max', 'mm', 'Placeholder'],
+    ['zMin', 'Z min', 'mm', 'Placeholder'], ['zMax', 'Z max', 'mm', 'Placeholder'],
+    ['bMin', 'B min', 'deg', 'Placeholder'], ['bMax', 'B max', 'deg', 'Placeholder'],
+    ['homeX', 'Home X', 'mm', 'Placeholder'], ['homeZ', 'Home Z', 'mm', 'Placeholder'], ['homeB', 'Home B', 'deg', 'Placeholder'],
+  ]},
+  { group: 'Motion', items: [
+    ['feedMode', 'Feed rate applies to', 'select', 'RepRapFirmware applies F to the linear axes.', [['linear','Linear axes (X, Z)'],['tip','Nozzle tip vs bed']]],
+    ['vX', 'Max speed X', 'mm/s', 'Placeholder'], ['vZ', 'Max speed Z', 'mm/s', 'Placeholder'],
+    ['vB', 'Max speed B', 'deg/s', 'Placeholder'], ['vC', 'Max speed C', 'deg/s', 'Placeholder'], ['vE', 'Max speed E', 'mm/s', 'Placeholder'],
+    ['aX', 'Accel X', 'mm/s²', 'Placeholder'], ['aZ', 'Accel Z', 'mm/s²', 'Placeholder'],
+    ['aB', 'Accel B', 'deg/s²', 'Placeholder'], ['aC', 'Accel C', 'deg/s²', 'Placeholder'], ['aE', 'Accel E', 'mm/s²', 'Placeholder'],
+    ['jerk', 'Corner speed floor', 'mm/s', 'Like jerk: speed allowed through sharp corners.'],
+    ['g0Inverse', 'G0 moves while in G93', 'select', 'The CNC standard says G93 does not apply to G0. Check what your firmware does.', [['inverse','Use F as inverse time'],['standard','Use F as mm/min']]],
+    ['homeSpeed', 'Homing speed', 'mm/s', 'Placeholder'],
+  ]},
+  { group: 'Drive and kinematics', items: [
+    ['bPulleyTeeth', 'B pivot pulley teeth (GT2)', 'teeth', 'Placeholder. Sets belt mm per degree of B.'],
+    ['xySteps', 'X/B motor steps per mm of belt', 'steps', '16T GT2 at 1/16 microstepping'],
+    ['zSteps', 'Z steps per mm', 'steps', 'T8×8 lead screw (BOM) at 1/16'],
+    ['cStepsPerDeg', 'C steps per degree', 'steps', 'Placeholder'],
+    ['m11', 'Mechanism: motor A per mm X', '×', 'How the belts really couple. A = m11·X + m12·B(belt mm)'],
+    ['m12', 'Mechanism: motor A per belt-mm B', '×', ''],
+    ['m21', 'Mechanism: motor B per mm X', '×', 'B motor = m21·X + m22·B(belt mm)'],
+    ['m22', 'Mechanism: motor B per belt-mm B', '×', ''],
+    ['kinCheck', 'Test a firmware matrix', 'bool', 'Moves the machine with the matrix below, like firmware would.'],
+    ['f11', 'Firmware: motor A per mm X', '×', 'Enter what your M669 config does'],
+    ['f12', 'Firmware: motor A per belt-mm B', '×', ''],
+    ['f21', 'Firmware: motor B per mm X', '×', ''],
+    ['f22', 'Firmware: motor B per belt-mm B', '×', ''],
+  ]},
+  { group: 'Hotend shape (for collision checks)', items: [
+    ['shaftR', 'Nozzle radius', 'mm', 'Placeholder for the long nozzle'],
+    ['ignoreTip', 'Ignore contact within', 'mm of tip', 'The tip touches fresh plastic by design.'],
+    ['bodyStart', 'Heater block starts', 'mm above tip', 'Placeholder'],
+    ['bodyLen', 'Heater block height', 'mm', 'Placeholder'],
+    ['bodyR', 'Heater block radius', 'mm', 'Placeholder'],
+    ['ignoreRecent', 'Skip the most recent', 'moves', 'Avoids flagging the bead just laid.'],
+  ]},
+  { group: 'Floating plastic check', items: [
+    ['layerH', 'Layer height', 'mm', 'Match your Cura layer height.'],
+    ['supportSkip', 'Ignore the last', 'bead segments', 'The bead just laid does not count as support.'],
+    ['floatMinRun', 'Flag bridges longer than', 'mm', 'Spans held at both ends. Short ones are normal over infill.'],
+    ['blobRatio', 'Flag primes and blobs above', 'mm E per mm', 'Filament pushed per mm of tip travel. Normal printing is about 0.03 to 0.05.'],
+    ['overhangMinRun', 'Flag overhangs longer than', 'mm', 'Plastic held at one end, dangling off an edge. Stray pieces are always flagged.'],
+  ]},
+  { group: 'Filament and flow', items: [
+    ['filamentDia', 'Filament diameter', 'mm', ''],
+    ['filamentDensity', 'Filament density', 'g/cm³', 'PLA is about 1.24, PETG 1.27'],
+    ['maxFlow', 'Hotend max flow', 'mm³/s', 'Placeholder. Depends on your hotend and temperature.'],
+    ['flowHigh', 'Flag over-extrusion above', '× typical', 'Compared with the typical bead in this file'],
+    ['flowLow', 'Flag under-extrusion below', '× typical', ''],
+  ]},
+  { group: 'Display', items: [
+    ['beadWidth', 'Bead width', 'mm', ''],
+    ['beadArcDeg', 'Bead smoothness', 'deg per segment', 'Lower is smoother on large C moves.'],
+  ]},
+];
+
+const rad = d => d * Math.PI / 180;
+
+// ---------- Kinematics ----------
+// Returns tip in machine frame: r (radial, along arm), y (up); plus sin/cos of tilt
+function tipMachine(S, X, Z, B, out) {
+  const b = rad(S.bSign * B), sb = Math.sin(b), cb = Math.cos(b), L = S.nozzleOffset;
+  let r, y;
+  if (S.xzRef === 'tipAtB0') { r = X + L * sb; y = Z + L * (1 - cb); }
+  else if (S.xzRef === 'pivot') { r = X + L * sb; y = Z - L * cb; }
+  else { r = X; y = Z; }
+  out[0] = r; out[1] = y; out[2] = sb; out[3] = cb;
+  return out;
+}
+// machine-frame point (x, y, z) -> bed frame, given C
+function machineToBed(S, x, y, z, C, out) {
+  const t = rad(S.cSign * C), ct = Math.cos(t), st = Math.sin(t);
+  out[0] = x * ct - z * st; out[1] = y; out[2] = x * st + z * ct;
+  return out;
+}
+function mmPerDegB(S) { return S.bPulleyTeeth * 2 / 360; }
+function motorsFrom(S, X, B, fw) {
+  const bm = B * mmPerDegB(S);
+  return fw
+    ? [S.f11 * X + S.f12 * bm, S.f21 * X + S.f22 * bm]
+    : [S.m11 * X + S.m12 * bm, S.m21 * X + S.m22 * bm];
+}
+function kinDiffers(S) {
+  return S.kinCheck && (S.f11 !== S.m11 || S.f12 !== S.m12 || S.f21 !== S.m21 || S.f22 !== S.m22);
+}
+
+// ---------- Parser ----------
+// type: 0 travel G0, 1 G1, 2 home, 3 set (G92), 4 dwell
+async function parseGcode(S, lines, onProgress) {
+  const st = [0, 0, 0, 0, 0];
+  const pts = [...st];
+  const type = [], lineNo = [], feed = [], dwell = [], inv = [];
+  const warnings = [];
+  let absXYZ = true, absE = true, F = 1500, lastMotion = 1, warnedY = false, invMode = false, curInv = 0;
+  const re = /([A-Z])\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g;
+  const AX = { X: 0, Z: 1, B: 2, C: 3 };
+  const push = (t, i, f, dw, s) => {
+    type.push(t); lineNo.push(i); feed.push(f); dwell.push(dw); inv.push(curInv); curInv = 0;
+    for (let j = 0; j < 5; j++) { st[j] = s[j]; pts.push(s[j]); }
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if ((i & 16383) === 0 && onProgress) await onProgress(i / lines.length);
+    let s = lines[i];
+    const sc = s.indexOf(';');
+    if (sc >= 0) s = s.slice(0, sc);
+    if (s.indexOf('(') >= 0) s = s.replace(/\(.*?\)/g, '');
+    s = s.trim();
+    if (!s) continue;
+    s = s.toUpperCase();
+    re.lastIndex = 0;
+    let m, g = -1, mc = -1;
+    const w = {};
+    let hasAxis = false;
+    while ((m = re.exec(s))) {
+      const L = m[1], v = parseFloat(m[2]);
+      if (L === 'G' && g < 0) g = v;
+      else if (L === 'M' && mc < 0) mc = v;
+      else { w[L] = v; if (L in AX || L === 'E' || L === 'Y') hasAxis = true; }
+    }
+    if (g === 0 || g === 1 || (g < 0 && mc < 0 && hasAxis)) {
+      const gg = g >= 0 ? g : lastMotion; lastMotion = gg;
+      if ('F' in w) F = w.F;
+      if ('Y' in w && !warnedY) { warnings.push('Y words were found and ignored. This simulator expects C/X/Z/B/E G-code.'); warnedY = true; }
+      const t = st.slice();
+      for (const k in AX) if (k in w) t[AX[k]] = absXYZ ? w[k] : st[AX[k]] + w[k];
+      if ('E' in w) t[4] = absE ? w.E : st[4] + w.E;
+      let changed = false;
+      for (let j = 0; j < 5; j++) if (t[j] !== st[j]) { changed = true; break; }
+      if (changed) { curInv = invMode && (gg !== 0 || S.g0Inverse === 'inverse') ? 1 : 0; push(gg === 0 ? 0 : 1, i, F, 0, t); }
+    } else if (g === 28) {
+      const t = st.slice();
+      const any = ('X' in w) || ('Z' in w) || ('B' in w) || ('C' in w);
+      if (!any || 'X' in w) t[0] = S.homeX;
+      if (!any || 'Z' in w) t[1] = S.homeZ;
+      if (!any || 'B' in w) t[2] = S.homeB;
+      if ('C' in w) t[3] = 0;
+      push(2, i, F, 0, t);
+    } else if (g === 92) {
+      const t = st.slice();
+      for (const k in AX) if (k in w) t[AX[k]] = w[k];
+      if ('E' in w) t[4] = w.E;
+      push(3, i, F, 0, t);
+    } else if (g === 4) {
+      const secs = ('S' in w) ? w.S : ('P' in w ? w.P / 1000 : 0);
+      if (secs > 0) push(4, i, F, secs, st.slice());
+    } else if (g === 93) invMode = true;
+    else if (g === 94) invMode = false;
+    else if (g === 90) absXYZ = true;
+    else if (g === 91) absXYZ = false;
+    else if (mc === 82) absE = true;
+    else if (mc === 83) absE = false;
+  }
+  const n = type.length;
+  return {
+    lines, n, warnings,
+    type: Uint8Array.from(type), line: Int32Array.from(lineNo),
+    feed: Float32Array.from(feed), dwell: Float32Array.from(dwell), inv: Uint8Array.from(inv),
+    cmd: Float64Array.from(pts),
+  };
+}
+
+// Apply firmware-vs-mechanism coupling: what the machine really does
+function computeActual(S, P) {
+  const act = new Float64Array(P.cmd);
+  if (kinDiffers(S)) {
+    const mpd = mmPerDegB(S);
+    const det = S.m11 * S.m22 - S.m12 * S.m21;
+    for (let s = 0; s <= P.n; s++) {
+      const X = P.cmd[s * 5], B = P.cmd[s * 5 + 2];
+      const [a, b] = motorsFrom(S, X, B, true);
+      const Xa = (S.m22 * a - S.m12 * b) / det;
+      const Bmm = (-S.m21 * a + S.m11 * b) / det;
+      act[s * 5] = Xa; act[s * 5 + 2] = Bmm / mpd;
+    }
+  }
+  P.act = act;
+}
+
+// ---------- Planner (trapezoidal, with lookahead) ----------
+function plan(S, P) {
+  const n = P.n, c = P.cmd;
+  const L = new Float64Array(n), vc = new Float64Array(n), acc = new Float64Array(n);
+  const kind = new Int8Array(n), U = new Float64Array(n * 4);
+  const vmax = [S.vX, S.vZ, S.vB, S.vC], amax = [S.aX, S.aZ, S.aB, S.aC];
+  const tA = [0, 0, 0, 0], tB = [0, 0, 0, 0], pm = [0, 0, 0], p0 = [0, 0, 0], p1 = [0, 0, 0];
+  const d = [0, 0, 0, 0];
+  for (let i = 0; i < n; i++) {
+    const t = P.type[i];
+    if (t === 3 || t === 4) continue;
+    const b0 = i * 5, b1 = b0 + 5;
+    for (let k = 0; k < 4; k++) d[k] = c[b1 + k] - c[b0 + k];
+    const dE = c[b1 + 4] - c[b0 + 4];
+    const lin = Math.hypot(d[0], d[1]), rot = Math.hypot(d[2], d[3]);
+    let len, kd;
+    if (S.feedMode === 'tip' && (lin > 1e-9 || rot > 1e-9)) {
+      tipMachine(S, c[b0], c[b0 + 1], c[b0 + 2], tA); machineToBed(S, tA[0], tA[1], 0, c[b0 + 3], p0);
+      tipMachine(S, c[b1], c[b1 + 1], c[b1 + 2], tB); machineToBed(S, tB[0], tB[1], 0, c[b1 + 3], p1);
+      const mX = (c[b0] + c[b1]) / 2, mZ = (c[b0 + 1] + c[b1 + 1]) / 2, mB = (c[b0 + 2] + c[b1 + 2]) / 2, mC = (c[b0 + 3] + c[b1 + 3]) / 2;
+      tipMachine(S, mX, mZ, mB, tA); machineToBed(S, tA[0], tA[1], 0, mC, pm);
+      len = Math.hypot(pm[0] - p0[0], pm[1] - p0[1], pm[2] - p0[2]) + Math.hypot(p1[0] - pm[0], p1[1] - pm[1], p1[2] - pm[2]);
+      kd = 1;
+      if (len < 1e-6) { len = rot; kd = 2; }
+    } else if (lin > 1e-9) { len = lin; kd = 1; }
+    else if (rot > 1e-9) { len = rot; kd = 2; }
+    else if (Math.abs(dE) > 1e-9) { len = Math.abs(dE); kd = 3; }
+    else continue;
+    // G93 inverse time: F means finish the move in 1/F minutes
+    const v = t === 2 ? S.homeSpeed : P.inv[i] ? Math.max(len * P.feed[i] / 60, 1e-4) : Math.max(P.feed[i] / 60, 0.01);
+    let T = len / v, a = Infinity;
+    for (let k = 0; k < 4; k++) {
+      const ad = Math.abs(d[k]);
+      if (ad > 1e-12) { T = Math.max(T, ad / vmax[k]); a = Math.min(a, amax[k] * len / ad); }
+    }
+    if (Math.abs(dE) > 1e-12) { T = Math.max(T, Math.abs(dE) / S.vE); a = Math.min(a, S.aE * len / Math.abs(dE)); }
+    L[i] = len; vc[i] = len / T; acc[i] = a; kind[i] = kd;
+    let nrm = 0;
+    for (let k = 0; k < 4; k++) { U[i * 4 + k] = d[k] / vmax[k]; nrm += U[i * 4 + k] ** 2; }
+    nrm = Math.sqrt(nrm) || 1;
+    for (let k = 0; k < 4; k++) U[i * 4 + k] /= nrm;
+  }
+  const J = new Float64Array(n + 1);
+  for (let i = 1; i < n; i++) {
+    if (kind[i] > 0 && kind[i] === kind[i - 1]) {
+      let cos = 0;
+      for (let k = 0; k < 4; k++) cos += U[i * 4 + k] * U[(i - 1) * 4 + k];
+      const vmin = Math.min(vc[i], vc[i - 1]);
+      J[i] = Math.max(vmin * Math.max(0, cos), Math.min(S.jerk, vmin));
+    }
+  }
+  for (let i = n - 1; i >= 0; i--) if (L[i] > 0) J[i] = Math.min(J[i], Math.sqrt(J[i + 1] ** 2 + 2 * acc[i] * L[i]));
+  for (let i = 0; i < n; i++) if (L[i] > 0) J[i + 1] = Math.min(J[i + 1], Math.sqrt(J[i] ** 2 + 2 * acc[i] * L[i]));
+
+  const tStart = new Float64Array(n + 1), dur = new Float64Array(n);
+  const v0a = new Float64Array(n), vpa = new Float64Array(n), ta = new Float64Array(n), tcr = new Float64Array(n), da = new Float64Array(n);
+  let time = 0;
+  for (let i = 0; i < n; i++) {
+    tStart[i] = time;
+    if (P.type[i] === 4) { dur[i] = P.dwell[i]; time += dur[i]; continue; }
+    if (L[i] <= 0) continue;
+    const a = acc[i], v0 = J[i], v1 = J[i + 1], len = L[i];
+    let vp = vc[i];
+    let dA = (vp * vp - v0 * v0) / (2 * a), dD = (vp * vp - v1 * v1) / (2 * a);
+    if (dA + dD > len) {
+      vp = Math.sqrt((2 * a * len + v0 * v0 + v1 * v1) / 2);
+      dA = (vp * vp - v0 * v0) / (2 * a); dD = (vp * vp - v1 * v1) / (2 * a);
+    }
+    const tA_ = isFinite(a) ? (vp - v0) / a : 0, tD_ = isFinite(a) ? (vp - v1) / a : 0;
+    const tC_ = Math.max(0, (len - dA - dD) / vp);
+    v0a[i] = v0; vpa[i] = vp; ta[i] = tA_; tcr[i] = tC_; da[i] = isFinite(a) ? dA : 0;
+    dur[i] = tA_ + tC_ + tD_;
+    time += dur[i];
+  }
+  tStart[n] = time;
+  Object.assign(P, { L, vc, acc, J, tStart, dur, v0: v0a, vp: vpa, ta, tcr, da, total: time });
+}
+
+// distance along move at local time t
+function sAt(P, i, t) {
+  const L = P.L[i];
+  if (L <= 0 || P.dur[i] <= 0) return 1;
+  const a = P.acc[i], v0 = P.v0[i], vp = P.vp[i], ta = P.ta[i], tc = P.tcr[i];
+  let s;
+  if (!isFinite(a)) s = vp * t;
+  else if (t < ta) s = v0 * t + 0.5 * a * t * t;
+  else if (t < ta + tc) s = P.da[i] + vp * (t - ta);
+  else { const tt = t - ta - tc; s = P.da[i] + vp * tc + vp * tt - 0.5 * a * tt * tt; }
+  return Math.min(1, Math.max(0, s / L));
+}
+function findMove(P, T) {
+  if (T <= 0) return 0;
+  if (T >= P.total) return P.n;
+  let lo = 0, hi = P.n - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (P.tStart[mid] <= T) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+// state at time T -> {i, frac, s:[X,Z,B,C,E] actual, c: commanded}
+function stateAt(P, T, out) {
+  const i = findMove(P, T);
+  out.i = i;
+  if (i >= P.n) {
+    out.frac = 1;
+    for (let k = 0; k < 5; k++) { out.s[k] = P.act[P.n * 5 + k]; out.c[k] = P.cmd[P.n * 5 + k]; }
+    return out;
+  }
+  const f = P.type[i] === 4 ? 1 : sAt(P, i, T - P.tStart[i]);
+  out.frac = f;
+  const b0 = i * 5, b1 = b0 + 5;
+  for (let k = 0; k < 5; k++) {
+    out.s[k] = P.act[b0 + k] + (P.act[b1 + k] - P.act[b0 + k]) * f;
+    out.c[k] = P.cmd[b0 + k] + (P.cmd[b1 + k] - P.cmd[b0 + k]) * f;
+  }
+  return out;
+}
+
+// ---------- Bead segments (bed frame) ----------
+function buildBeadSegments(S, P) {
+  const n = P.n, a = P.act;
+  const start = new Int32Array(n + 1);
+  for (let i = 0; i < n; i++) {
+    let k = 0;
+    if (P.type[i] === 1) {
+      const b0 = i * 5, b1 = b0 + 5;
+      const dE = a[b1 + 4] - a[b0 + 4];
+      let moved = false;
+      for (let j = 0; j < 4; j++) if (a[b1 + j] !== a[b0 + j]) moved = true;
+      if (dE > 1e-6 && moved) {
+        k = Math.max(1, Math.ceil(Math.abs(a[b1 + 3] - a[b0 + 3]) / S.beadArcDeg), Math.ceil(Math.abs(a[b1 + 2] - a[b0 + 2]) / 6));
+        k = Math.min(k, 32);
+      }
+    }
+    start[i + 1] = start[i] + k;
+  }
+  const total = start[n];
+  const seg = new Float32Array(total * 6); // p0, p1
+  const segB = new Float32Array(total);
+  const segN = new Float32Array(total * 3); // nozzle direction (pivot to tip), bed frame
+  const segArea = new Float32Array(total); // bead cross-section implied by E, mm²
+  const segPrime = new Uint8Array(total); // 1 = prime/unretract: filament pushed while the tip barely moves
+  const filArea = Math.PI * (S.filamentDia / 2) ** 2;
+  const tm = [0, 0, 0, 0], p = [0, 0, 0], nv = [0, 0, 0];
+  for (let i = 0; i < n; i++) {
+    const k = start[i + 1] - start[i];
+    if (!k) continue;
+    const b0 = i * 5, b1 = b0 + 5;
+    let prev = null, pathLen = 0;
+    for (let j = 0; j <= k; j++) {
+      const f = j / k;
+      const X = a[b0] + (a[b1] - a[b0]) * f, Z = a[b0 + 1] + (a[b1 + 1] - a[b0 + 1]) * f;
+      const B = a[b0 + 2] + (a[b1 + 2] - a[b0 + 2]) * f, C = a[b0 + 3] + (a[b1 + 3] - a[b0 + 3]) * f;
+      tipMachine(S, X, Z, B, tm); machineToBed(S, tm[0], tm[1], 0, C, p);
+      if (j > 0) {
+        const o = (start[i] + j - 1) * 6;
+        seg[o] = prev[0]; seg[o + 1] = prev[1]; seg[o + 2] = prev[2];
+        seg[o + 3] = p[0]; seg[o + 4] = p[1]; seg[o + 5] = p[2];
+        segB[start[i] + j - 1] = B;
+        machineToBed(S, tm[2], -tm[3], 0, C, nv);
+        const on = (start[i] + j - 1) * 3; segN[on] = nv[0]; segN[on + 1] = nv[1]; segN[on + 2] = nv[2];
+        pathLen += Math.hypot(p[0] - prev[0], p[1] - prev[1], p[2] - prev[2]);
+      }
+      prev = [p[0], p[1], p[2]];
+    }
+    const dEm = a[b1 + 4] - a[b0 + 4];
+    const area = pathLen > 1e-6 ? dEm * filArea / pathLen : 0;
+    const prime = pathLen < 0.05 || dEm / pathLen > S.blobRatio ? 1 : 0;
+    for (let s = start[i]; s < start[i + 1]; s++) { segArea[s] = area; segPrime[s] = prime; }
+  }
+  // typical bead: length-weighted median of cross-section, ignoring primes
+  let flowMedian = 0;
+  if (total) {
+    const samples = [], step = Math.max(1, Math.floor(total / 200000));
+    for (let s = 0; s < total; s += step) if (!segPrime[s] && segArea[s] > 0 && isFinite(segArea[s])) samples.push(segArea[s]);
+    samples.sort((x, y) => x - y);
+    flowMedian = samples.length ? samples[Math.floor(samples.length / 2)] : 0;
+  }
+  Object.assign(P, { beadStart: start, beadTotal: total, seg, segB, segN, segArea, segPrime, flowMedian, filArea });
+}
+
+// ---------- Preflight checks ----------
+async function preflight(S, P, onProgress) {
+  const issues = [];
+  const add = (kind, i, text, pos) => {
+    const last = issues[issues.length - 1];
+    if (last && last.kind === kind && i - last.endMove <= 3) { last.endMove = i; last.endLine = P.line[i]; last.count++; return; }
+    if (issues.length < 50000) issues.push({ kind, move: i, endMove: i, line: P.line[i], endLine: P.line[i], text, count: 1, pos: pos ? pos.slice() : null });
+  };
+  const beadR = S.beadWidth / 2;
+  const rShaft = S.shaftR + beadR, rBody = beadR + 0.8;
+  const cell = 2 * Math.max(rShaft, rBody);
+  const hash = new Map();
+  const key = (ix, iy, iz) => ((ix + 2048) * 4096 + (iy + 2048)) * 4096 + (iz + 2048);
+  const insert = (x, y, z) => {
+    const k = key(Math.floor(x / cell), Math.floor(y / cell), Math.floor(z / cell));
+    let arr = hash.get(k); if (!arr) { arr = []; hash.set(k, arr); }
+    arr.push(x, y, z);
+  };
+  const hit = (x, y, z, r) => {
+    const ix = Math.floor((x - r) / cell), iy = Math.floor((y - r) / cell), iz = Math.floor((z - r) / cell);
+    const r2 = r * r;
+    for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) for (let c = 0; c < 2; c++) {
+      const arr = hash.get(key(ix + a, iy + b, iz + c));
+      if (!arr) continue;
+      for (let q = 0; q < arr.length; q += 3) {
+        const dx = arr[q] - x, dy = arr[q + 1] - y, dz = arr[q + 2] - z;
+        if (dx * dx + dy * dy + dz * dz < r2) return true;
+      }
+    }
+    return false;
+  };
+  // beads laid in the last ignoreRecent moves are not in the hash yet; check them directly for primes
+  const nearRecent = p => {
+    const r2 = 1.2 * 1.2;
+    for (let j = Math.max(0, P.beadStart[Math.max(0, iCur - S.ignoreRecent)]); j < P.beadStart[iCur]; j++) {
+      const o = j * 6, dx = P.seg[o + 3] - p[0], dy = P.seg[o + 4] - p[1], dz = P.seg[o + 5] - p[2];
+      if (dx * dx + dy * dy + dz * dz < r2) return true;
+    }
+    return false;
+  };
+  let iCur = 0;
+  const insertBeadsOfMove = j => {
+    for (let s = P.beadStart[j]; s < P.beadStart[j + 1]; s++) {
+      const o = s * 6;
+      insert(P.seg[o + 3], P.seg[o + 4], P.seg[o + 5]);
+      insert((P.seg[o] + P.seg[o + 3]) / 2, (P.seg[o + 1] + P.seg[o + 4]) / 2, (P.seg[o + 2] + P.seg[o + 5]) / 2);
+    }
+  };
+  const bedR = S.bedDiameter / 2;
+  const tm = [0, 0, 0, 0], q = [0, 0, 0];
+  const ringN = 8, ringC = [], ringS = [];
+  for (let k = 0; k < ringN; k++) { ringC.push(Math.cos(2 * Math.PI * k / ringN)); ringS.push(Math.sin(2 * Math.PI * k / ringN)); }
+  const shaftTs = [];
+  for (let t = S.ignoreTip; t < S.bodyStart; t += 2) shaftTs.push(t);
+  const bodyTs = [S.bodyStart, S.bodyStart + S.bodyLen];
+  const fmt = v => (Math.round(v * 100) / 100).toString();
+
+  for (let i = 0; i < P.n; i++) {
+    if ((i & 2047) === 0 && onProgress) await onProgress(i / P.n);
+    iCur = i;
+    const tp = P.type[i];
+    const jj = i - S.ignoreRecent;
+    if (jj >= 0) insertBeadsOfMove(jj);
+    if (tp === 3 || tp === 4) continue;
+    const b1 = (i + 1) * 5;
+    const X = P.cmd[b1], Z = P.cmd[b1 + 1], B = P.cmd[b1 + 2];
+    if (X < S.xMin - 1e-6 || X > S.xMax + 1e-6) add('limit', i, `X ${fmt(X)} is outside ${S.xMin} to ${S.xMax} mm`);
+    else if (Z < S.zMin - 1e-6 || Z > S.zMax + 1e-6) add('limit', i, `Z ${fmt(Z)} is outside ${S.zMin} to ${S.zMax} mm`);
+    else if (B < S.bMin - 1e-6 || B > S.bMax + 1e-6) add('limit', i, `B ${fmt(B)}° is outside ${S.bMin}° to ${S.bMax}°`);
+    const Xa = P.act[b1], Za = P.act[b1 + 1], Ba = P.act[b1 + 2], Ca = P.act[b1 + 3];
+    tipMachine(S, Xa, Za, Ba, tm);
+    const r = tm[0], y = tm[1], sb = tm[2], cb = tm[3];
+    if (tp === 1 && P.dur[i] > 0 && P.act[b1 + 4] > P.act[b1 - 1]) {
+      const b0 = i * 5;
+      tipMachine(S, P.act[b0], P.act[b0 + 1], P.act[b0 + 2], tm); machineToBed(S, tm[0], tm[1], 0, P.act[b0 + 3], q);
+      const qx = q[0], qy = q[1], qz = q[2];
+      tipMachine(S, Xa, Za, Ba, tm); machineToBed(S, tm[0], tm[1], 0, Ca, q);
+      const tipLen = Math.hypot(q[0] - qx, q[1] - qy, q[2] - qz), dE = P.act[b1 + 4] - P.act[b1 - 1];
+      if (tipLen < 0.05 || dE / tipLen > S.blobRatio) {
+        // A prime at the part (start of a path) is normal. Only flag it if nothing is nearby.
+        const nearR = Math.min(1.2, cell / 2);
+        let moved = false; for (let k = 0; k < 4; k++) if (P.act[b0 + k] !== P.act[b1 + k]) moved = true;
+        // pure "G1 E.." lines (like a start-code prime at the park position) are left alone
+        if (moved && q[1] > 2.5 * S.layerH && !hit(q[0], q[1], q[2], nearR) && !nearRecent(q))
+          add('blob', i, `Primes ${dE.toFixed(2)} mm of filament in mid-air, away from the part`, q);
+      } else {
+        const vol = dE * P.filArea / P.dur[i];
+        const area = P.segArea[P.beadStart[i]], med = P.flowMedian;
+        if (vol > S.maxFlow) add('flow', i, `Needs ${vol.toFixed(1)} mm³/s, above the hotend's ${S.maxFlow} mm³/s`, q);
+        else if (med > 0 && area > med * S.flowHigh) add('over', i, `Lays ${(area / med).toFixed(1)}× the typical amount of plastic per mm`, q);
+        else if (med > 0 && area < med * S.flowLow) add('under', i, `Lays only ${(area / med).toFixed(2)}× the typical amount of plastic per mm`, q);
+      }
+      if (tipLen < 0.05) { /* effectively a prime in place: speed checks do not apply */ }
+      else if (P.inv[i]) {
+        const req = 60 / Math.max(P.feed[i], 1e-9);
+        if (P.dur[i] > req * 2) add('slow', i, `Axis limits stretch this G93 move to ${(P.dur[i] / req).toFixed(1)}× its requested time`);
+      } else {
+        const tipV = tipLen / P.dur[i], want = P.feed[i] / 60;
+        if (want > 0 && tipV > want * 1.5) add('fast', i, `Nozzle crosses the bed ${(tipV / want).toFixed(1)}× faster than the F value asks`);
+        else if (want > 0 && tipV < want * 0.5 && tipV > 0) add('slow', i, `Axis limits slow extrusion to ${(tipV / want).toFixed(2)}× the F value`);
+      }
+      tipMachine(S, Xa, Za, Ba, tm);
+    }
+    if (y < -0.05) { machineToBed(S, r, y, 0, Ca, q); add('bed', i, 'Nozzle tip goes below the bed surface', q); continue; }
+    let flagged = false;
+    for (const t of shaftTs) {
+      const x = r - t * sb, yy = y + t * cb;
+      machineToBed(S, x, yy, 0, Ca, q);
+      if (yy < 0 && Math.hypot(q[0], q[2]) < bedR) { add('bed', i, 'Nozzle shaft hits the bed', q); flagged = true; break; }
+      if (hit(q[0], q[1], q[2], rShaft)) { add('part', i, 'Nozzle may hit printed plastic', q); flagged = true; break; }
+    }
+    if (flagged) continue;
+    outer: for (const t of bodyTs) {
+      const cx = r - t * sb, cy = y + t * cb;
+      for (let k = 0; k < ringN; k++) {
+        const x = cx + S.bodyR * ringC[k] * cb, yy = cy + S.bodyR * ringC[k] * sb, z = S.bodyR * ringS[k];
+        machineToBed(S, x, yy, z, Ca, q);
+        if (yy < 0 && Math.hypot(q[0], q[2]) < bedR) { add('bed', i, 'Heater block hits the bed', q); break outer; }
+        if (hit(q[0], q[1], q[2], rBody)) { add('part', i, 'Heater block may hit printed plastic', q); break outer; }
+      }
+    }
+  }
+  return issues;
+}
+
+
+// ---------- Filament totals ----------
+function filamentStats(S, P) {
+  let pushed = 0, retracted = 0, printed = 0, resets = 0;
+  const a = P.cmd;
+  for (let i = 0; i < P.n; i++) {
+    const t = P.type[i];
+    if (t === 3) { if (a[(i + 1) * 5 + 4] !== a[i * 5 + 4]) resets++; continue; }
+    const dE = a[(i + 1) * 5 + 4] - a[i * 5 + 4];
+    if (dE > 0) { pushed += dE; if (P.beadStart[i + 1] > P.beadStart[i]) printed += dE; }
+    else retracted -= dE;
+  }
+  const net = pushed - retracted;
+  const grams = net * P.filArea * S.filamentDensity / 1000;
+  return { pushed, retracted, net, printed, grams, resets };
+}
+
+
+// ---------- Slicer settings: what the file says, and what the moves show ----------
+function medianOf(arr) { if (!arr.length) return NaN; const a = Float64Array.from(arr).sort(); return a[a.length >> 1]; }
+function extractSlicerInfo(S, P) {
+  const lines = P.lines, nL = lines.length;
+  const header = {}, cura = {}, other = {}, s4 = {}, topComments = [];
+  const temps = { nozzle: [], bed: [], fan: [] };
+  const modes = { M82: 0, M83: 0, G93: 0, G94: 0 };
+  let settingText = '', curaError = null;
+  const HEAD = /^;\s*(FLAVOR|TIME|Filament used|Layer height|MINX|MINY|MINZ|MAXX|MAXY|MAXZ|Generated with|LAYER_COUNT|TARGET_MACHINE\.NAME|PRINT\.TIME|NOZZLE_DIAMETER|MATERIAL)\s*[:=]?\s*(.*)$/i;
+  for (let i = 0; i < nL; i++) {
+    const t = lines[i].trimStart();
+    const c0 = t.charCodeAt(0);
+    if (c0 === 59) { // ';'
+      if (t.startsWith(';SETTING_3 ')) { settingText += t.slice(11); continue; }
+      let m = t.match(/^;\s*s4\s*:\s*([^=]+?)\s*=\s*(.*)$/i);
+      if (m) { s4[m[1]] = m[2].trim(); continue; }
+      m = t.match(HEAD);
+      if (m) { if (!(m[1] in header)) header[m[1]] = m[2].trim(); continue; }
+      if (i > nL - 3000) { m = t.match(/^;\s*([a-z_][a-z0-9_]*)\s*=\s*(.*)$/i); if (m) { other[m[1]] = m[2].trim(); continue; } }
+      if (i < 200 && topComments.length < 12 && t.length > 1) topComments.push(t);
+      continue;
+    }
+    if (c0 !== 77 && c0 !== 109 && c0 !== 71 && c0 !== 103) continue; // M or G
+    const u = t.slice(0, 12).toUpperCase();
+    if (u.startsWith('G93')) { modes.G93++; continue; }
+    if (u.startsWith('G94')) { modes.G94++; continue; }
+    if (u.startsWith('M82')) { modes.M82++; continue; }
+    if (u.startsWith('M83')) { modes.M83++; continue; }
+    const m = t.match(/^M(104|109|140|190|106|107)\b([^;]*)/i);
+    if (m) {
+      const sv = m[2].match(/S\s*([-+]?\d*\.?\d+)/i);
+      const v = sv ? +sv[1] : (m[1] === '107' ? 0 : NaN);
+      if (!isFinite(v)) continue;
+      if (m[1] === '104' || m[1] === '109') temps.nozzle.push(v);
+      else if (m[1] === '140' || m[1] === '190') temps.bed.push(v);
+      else temps.fan.push(v <= 1 ? v * 100 : v / 255 * 100);
+    }
+  }
+  if (settingText) {
+    try {
+      // Cura doubles backslashes (and escapes newlines) before splitting the JSON into comment lines; undo that first
+      let obj;
+      try { obj = JSON.parse(settingText.replace(/\\\\|\\n|\\r/g, m => m === '\\\\' ? '\\' : m === '\\n' ? '\n' : '\r')); }
+      catch { obj = JSON.parse(settingText); } // already unescaped (not written by Cura's GCodeWriter)
+      const blocks = [obj.global_quality, ...(obj.extruder_quality || [])];
+      for (const b of blocks) {
+        if (typeof b !== 'string') continue;
+        let sec = '';
+        for (const ln of b.split('\n')) {
+          const s = ln.trim(), sm = s.match(/^\[(.+)\]$/);
+          if (sm) { sec = sm[1]; continue; }
+          if (sec === 'values') { const kv = s.match(/^([^=]+?)\s*=\s*(.*)$/); if (kv) cura[kv[1]] = kv[2]; }
+        }
+      }
+    } catch (e) { curaError = 'Found Cura settings but could not read them.'; }
+  }
+  // measured from the moves
+  const retr = [], retrF = [], prime = [], printV = [], travelV = [];
+  const tm = [0, 0, 0, 0], p0 = [0, 0, 0], p1 = [0, 0, 0];
+  const tipLenOf = i => {
+    const b0 = i * 5, b1 = b0 + 5, a = P.act;
+    tipMachine(S, a[b0], a[b0 + 1], a[b0 + 2], tm); machineToBed(S, tm[0], tm[1], 0, a[b0 + 3], p0);
+    tipMachine(S, a[b1], a[b1 + 1], a[b1 + 2], tm); machineToBed(S, tm[0], tm[1], 0, a[b1 + 3], p1);
+    return Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]);
+  };
+  const step = Math.max(1, Math.floor(P.n / 60000));
+  for (let i = 0; i < P.n; i++) {
+    const t = P.type[i];
+    if (t !== 0 && t !== 1) continue;
+    const dE = P.cmd[(i + 1) * 5 + 4] - P.cmd[i * 5 + 4];
+    if (dE < -1e-6) { retr.push(-dE); if (!P.inv[i]) retrF.push(P.feed[i] / 60); continue; }
+    const hasBead = P.beadStart[i + 1] > P.beadStart[i];
+    if (hasBead && P.segPrime[P.beadStart[i]]) { prime.push(dE); continue; }
+    if (i % step) continue;
+    if (hasBead || dE <= 1e-6) {
+      const len = tipLenOf(i);
+      if (len < 0.05) continue;
+      const v = P.inv[i] ? len * P.feed[i] / 60 : (S.feedMode === 'tip' ? P.feed[i] / 60 : len / Math.max(P.dur[i], 1e-9));
+      const req = P.inv[i] ? len * P.feed[i] / 60 : P.feed[i] / 60;
+      (hasBead ? printV : travelV).push(req);
+    }
+  }
+  const range = a => a.length ? { first: a[0], max: Math.max(...a) } : null;
+  const measured = {
+    extrusion: modes.M83 && !modes.M82 ? 'Relative (M83)' : modes.M82 && !modes.M83 ? 'Absolute (M82)' : modes.M82 && modes.M83 ? `Mixed: M82 ×${modes.M82}, M83 ×${modes.M83}` : 'Not set (absolute by default)',
+    feedModes: modes.G93 ? `G93 inverse time, ${modes.G93.toLocaleString()} switches` : 'G94 only (mm/min)',
+    nozzle: range(temps.nozzle), bed: range(temps.bed), fan: range(temps.fan),
+    retractCount: retr.length, retract: medianOf(retr), retractSpeed: medianOf(retrF),
+    primeCount: prime.length, prime: medianOf(prime),
+    printSpeed: medianOf(printV), travelSpeed: medianOf(travelV),
+  };
+  const hasEmbedded = Object.keys(header).length + Object.keys(cura).length + Object.keys(s4).length + Object.keys(other).length > 0;
+  return { header, cura, other, s4, topComments, measured, hasEmbedded, curaError };
+}
+
+// ---------- Floating plastic (unsupported extrusion) ----------
+// A bead is supported if earlier plastic (or the bed) sits under it, looking along the nozzle axis.
+async function supportCheck(S, Q, onProgress, collect) {
+  const w = S.beadWidth, r = 0.9 * w, h = S.layerH, K = Math.max(1, Math.round(S.supportSkip));
+  const cell = 2 * r, hash = new Map();
+  const key = (ix, iy, iz) => ((ix + 8192) * 16384 + (iy + 8192)) * 16384 + (iz + 8192);
+  const insert = (x, y, z) => {
+    const k = key(Math.floor(x / cell), Math.floor(y / cell), Math.floor(z / cell));
+    let a = hash.get(k); if (!a) { a = []; hash.set(k, a); } a.push(x, y, z);
+  };
+  const hit = (x, y, z) => {
+    const ix = Math.floor((x - r) / cell), iy = Math.floor((y - r) / cell), iz = Math.floor((z - r) / cell), r2 = r * r;
+    for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) for (let c = 0; c < 2; c++) {
+      const arr = hash.get(key(ix + a, iy + b, iz + c)); if (!arr) continue;
+      for (let q = 0; q < arr.length; q += 3) { const dx = arr[q] - x, dy = arr[q + 1] - y, dz = arr[q + 2] - z; if (dx * dx + dy * dy + dz * dz < r2) return true; }
+    }
+    return false;
+  };
+  const offs = [0.5, 1, 1.6, 2.2].map(k => k * h);
+  const bedTop = 2.2 * h + 0.05;
+  const seg = Q.seg, N = Q.segN, start = Q.beadStart;
+  const issues = [];
+  let totalLen = 0, floatLen = 0, belowLen = 0;
+  let run = null, lastEnd = null, lastMove = -9, prevOk = false;
+  let strayLen = 0, strayCount = 0;
+  const status = new Uint8Array(Q.beadTotal); // 0 ok, 1 bridge, 2 overhang, 3 stray, 4 below bed, 5 short bridge, 6 short overhang
+  const runLen = new Float32Array(Q.beadTotal);
+  // A run touching supported plastic at both ends is a bridge: flag only if long.
+  // A run attached at neither end is a stray piece: always flag.
+  const endRun = anchoredEnd => {
+    if (!run) return;
+    const stray = !run.anchoredStart && !anchoredEnd;
+    const bridge = run.anchoredStart && anchoredEnd;
+    const flag = stray || (bridge ? run.len >= S.floatMinRun : run.len >= S.overhangMinRun);
+    const code = stray ? 3 : bridge ? (flag ? 1 : 5) : (flag ? 2 : 6);
+    for (let q = run.s0; q <= run.s1; q++) { status[q] = code; runLen[q] = run.len; }
+    if (flag) {
+      floatLen += run.len;
+      if (stray) { strayLen += run.len; strayCount++; }
+      const text = stray
+        ? `Stray piece printed in mid-air, not attached to anything (${run.len.toFixed(1)} mm)`
+        : (run.anchoredStart && anchoredEnd
+          ? `Long bridge with nothing under it (${run.len.toFixed(1)} mm)`
+          : `Plastic hangs off an edge into mid-air (${run.len.toFixed(1)} mm)`);
+      if (collect && issues.length < 50000) issues.push({ kind: stray ? 'stray' : 'float', move: run.move, endMove: run.endMove, line: Q.line[run.move], endLine: Q.line[run.endMove], text, count: run.endMove - run.move + 1, pos: run.pos });
+    }
+    run = null;
+  };
+  for (let i = 0; i < Q.n; i++) {
+    if ((i & 4095) === 0 && onProgress) await onProgress(i / Q.n);
+    for (let s = start[i]; s < start[i + 1]; s++) {
+      const d = s - K;
+      if (d >= 0) { const o = d * 6; insert(seg[o + 3], seg[o + 4], seg[o + 5]); insert((seg[o] + seg[o + 3]) / 2, (seg[o + 1] + seg[o + 4]) / 2, (seg[o + 2] + seg[o + 5]) / 2); }
+      const o = s * 6;
+      const len = Math.hypot(seg[o + 3] - seg[o], seg[o + 4] - seg[o + 1], seg[o + 5] - seg[o + 2]);
+      if (len < 1e-6) continue;
+      const mx = (seg[o] + seg[o + 3]) / 2, my = (seg[o + 1] + seg[o + 4]) / 2, mz = (seg[o + 2] + seg[o + 5]) / 2;
+      totalLen += len;
+      if (my < -0.3) { belowLen += len; endRun(false); status[s] = 4; lastEnd = [seg[o + 3], seg[o + 4], seg[o + 5]]; lastMove = i; prevOk = false; continue; }
+      let ok = my <= bedTop;
+      if (!ok) for (const t of offs) { if (hit(mx + N[s * 3] * t, my + N[s * 3 + 1] * t, mz + N[s * 3 + 2] * t)) { ok = true; break; } }
+      const contiguous = lastEnd && Math.hypot(seg[o] - lastEnd[0], seg[o + 1] - lastEnd[1], seg[o + 2] - lastEnd[2]) < 0.5 && i - lastMove <= 1;
+      if (!contiguous) endRun(false);
+      if (!ok) {
+        if (!run) run = { move: i, endMove: i, len: 0, pos: [mx, my, mz], anchoredStart: contiguous && prevOk, s0: s, s1: s };
+        run.len += len; run.endMove = i; run.s1 = s;
+      } else endRun(true);
+      prevOk = ok;
+      lastEnd = [seg[o + 3], seg[o + 4], seg[o + 5]]; lastMove = i;
+    }
+  }
+  endRun(false);
+  return { issues, status, runLen, totalLen, floatLen, belowLen, strayLen, strayCount, frac: totalLen ? (floatLen + belowLen) / totalLen : 0 };
+}
+
+// Try each G-code convention and score how much plastic ends up floating
+async function detectConventions(S, P, onProgress) {
+  const combos = [];
+  for (const xzRef of ['tipAtB0', 'pivot', 'tip']) for (const bSign of [1, -1]) combos.push({ xzRef, bSign });
+  const out = [];
+  for (let k = 0; k < combos.length; k++) {
+    const S2 = { ...S, ...combos[k] };
+    const Q = { n: P.n, type: P.type, act: P.act, line: P.line };
+    buildBeadSegments(S2, Q);
+    const res = await supportCheck(S2, Q, onProgress ? f => onProgress((k + f) / combos.length) : null, false);
+    out.push({ ...combos[k], frac: res.frac, floatLen: res.floatLen, belowLen: res.belowLen, totalLen: res.totalLen });
+  }
+  return out.sort((a, b) => a.frac - b.frac);
+}
+
+// ---------- Demo G-code ----------
+function demoGcode(S) {
+  const L = S.nozzleOffset, out = [];
+  out.push('; Demo: flared cup printed as a spiral with a tilting nozzle');
+  out.push('; Format: C (bed, deg, cumulative) X (radius) Z B (tilt, deg) E');
+  out.push('G90', 'M82', 'G28', 'G92 E0', 'G1 B0 F3000');
+  const layerH = 0.25, turns = 90, stepDeg = 3, flare = 40;
+  let E = 0, prev = null, C = 0;
+  const pos = (r, y, tilt) => {
+    const b = rad(S.bSign * tilt), sb = Math.sin(b), cb = Math.cos(b);
+    return { X: r - L * sb, Z: y - L * (1 - cb) };
+  };
+  const r0 = 18;
+  let first = true;
+  for (let deg = 0; deg <= turns * 360; deg += stepDeg) {
+    const zTip = 0.2 + layerH * deg / 360;
+    const ramp = Math.min(1, zTip / 8);
+    const tiltDeg = -flare * ramp;
+    const r = r0 + (zTip > 2 ? (zTip - 2) * Math.tan(rad(flare)) * Math.min(1, (zTip - 2) / 6) : 0);
+    C = deg / S.cSign;
+    const p = pos(r, zTip, tiltDeg);
+    if (first) {
+      out.push(`G0 C${C.toFixed(3)} X${p.X.toFixed(3)} Z${(p.Z + 5).toFixed(3)} B${tiltDeg.toFixed(3)} F6000`);
+      out.push(`G1 Z${p.Z.toFixed(3)} F600`);
+      first = false;
+    } else {
+      const segLen = 2 * Math.PI * r * stepDeg / 360;
+      E += segLen * 0.0468;
+      out.push(`G1 C${C.toFixed(3)} X${p.X.toFixed(3)} Z${p.Z.toFixed(3)} B${tiltDeg.toFixed(3)} E${E.toFixed(5)} F1800`);
+    }
+    prev = p;
+  }
+  out.push(`G1 Z${(prev.Z + 20).toFixed(3)} F600`, 'G1 B0 F3000', '; end');
+  return out.join('\n');
+}
+
+if (typeof module !== 'undefined') module.exports = { DEFAULTS, SCHEMA, parseGcode, computeActual, plan, stateAt, sAt, findMove, buildBeadSegments, preflight, supportCheck, filamentStats, extractSlicerInfo, detectConventions, demoGcode, tipMachine, machineToBed, motorsFrom, kinDiffers, mmPerDegB };
+
+// ===== UI + rendering =====
+const $ = s => document.querySelector(s);
+let S = JSON.parse(JSON.stringify(DEFAULTS));
+let P = null, srcLines = null, srcName = '';
+let T = 0, playing = false, speedMul = 10;
+let issues = [];
+const view = { bedFrame: false, follow: false, beads: true, preview: true, color: 'tilt' };
+const manual = { active: false, cur: [0, 0, 0, 0], tgt: [0, 0, 0, 0] };
+const ST = { i: 0, frac: 0, s: [0, 0, 0, 0, 0], c: [0, 0, 0, 0, 0] };
+
+// ---------- three.js scene ----------
+const vp = $('#viewport');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000000, 0);
+vp.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, 1, 1, 5000);
+scene.add(new THREE.HemisphereLight(0xe9eef4, 0x151a20, 0.9));
+const keyLight = new THREE.DirectionalLight(0xfff6ea, 0.8); keyLight.position.set(260, 460, 320); scene.add(keyLight);
+const rimLight = new THREE.DirectionalLight(0x9cc4ff, 0.35); rimLight.position.set(-320, 220, -280); scene.add(rimLight);
+// Floor shadow lives outside the rotating root, and is round, so "hold the bed still" never makes it spin
+const floor = new THREE.Mesh(new THREE.CircleGeometry(460, 96), new THREE.MeshBasicMaterial({ color: 0x0b0e12, transparent: true, opacity: 0.35, depthWrite: false }));
+floor.rotation.x = -Math.PI / 2; floor.position.y = -8; scene.add(floor);
+const root = new THREE.Group(); scene.add(root);
+let bedGroup, headGroup, tipObj, arm, zCar, column, beadMesh, markerMesh, previewLine, beadGeo;
+const matFrame = new THREE.MeshStandardMaterial({ color: '#3b4350', metalness: 0.55, roughness: 0.5 });
+const matAlu = new THREE.MeshStandardMaterial({ color: '#b3bcc6', metalness: 0.6, roughness: 0.38 });
+const matPrinted = new THREE.MeshStandardMaterial({ color: '#2c323a', roughness: 0.75 });
+const matBlock = new THREE.MeshStandardMaterial({ color: '#c9ced4', metalness: 0.7, roughness: 0.32 });
+const matBrass = new THREE.MeshStandardMaterial({ color: '#d6a650', metalness: 0.85, roughness: 0.25 });
+const matBead = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.6 });
+
+function buildMachine() {
+  root.clear();
+  const bedR = S.bedDiameter / 2, L = S.nozzleOffset;
+  bedGroup = new THREE.Group(); root.add(bedGroup);
+  const plate = new THREE.Mesh(new THREE.CylinderGeometry(bedR, bedR, 4, 128), new THREE.MeshStandardMaterial({ color: '#262c33', metalness: 0.4, roughness: 0.6 }));
+  plate.position.y = -2.05; bedGroup.add(plate);
+  const top = new THREE.Mesh(new THREE.CircleGeometry(bedR - 2.5, 128), new THREE.MeshStandardMaterial({ color: '#1d3a31', roughness: 0.85 }));
+  top.rotation.x = -Math.PI / 2; top.position.y = -0.04; bedGroup.add(top);
+  const ringMat = new THREE.LineBasicMaterial({ color: 0x2c5446, transparent: true, opacity: 0.6 });
+  for (let r = 25; r < bedR - 5; r += 25) {
+    const pts = []; for (let k = 0; k <= 128; k++) { const a = k / 128 * Math.PI * 2; pts.push(new THREE.Vector3(r * Math.cos(a), -0.02, r * Math.sin(a))); }
+    bedGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ringMat));
+  }
+  // small tick at the rim so you can see the bed turn
+  const tick = new THREE.Mesh(new THREE.BoxGeometry(10, 0.6, 3), new THREE.MeshStandardMaterial({ color: '#f5b942', emissive: '#3a2a00' }));
+  tick.position.set(bedR - 7, 0.05, 0); bedGroup.add(tick);
+  const colX = Math.max(bedR, S.xMax) + 45, colH = S.zMax + L + 120;
+  column = new THREE.Mesh(new THREE.BoxGeometry(20, colH, 40), matFrame);
+  column.position.set(colX + 10, colH / 2 - 20, 0); root.add(column);
+  zCar = new THREE.Mesh(new THREE.BoxGeometry(26, 40, 50), matPrinted); root.add(zCar);
+  arm = new THREE.Mesh(new THREE.BoxGeometry(1, 14, 28), matAlu); root.add(arm);
+  headGroup = new THREE.Group(); root.add(headGroup);
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(4, 4, 40, 24), matAlu); shaft.rotation.x = Math.PI / 2; headGroup.add(shaft);
+  const ext = new THREE.Mesh(new THREE.BoxGeometry(34, 30, 36), matPrinted); ext.position.y = 18; headGroup.add(ext);
+  const bodyTop = -L + S.bodyStart + S.bodyLen;
+  const hotLen = Math.max(1, 3 - bodyTop);
+  const sink = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, hotLen, 24), matAlu); sink.position.y = bodyTop + hotLen / 2; headGroup.add(sink);
+  const block = new THREE.Mesh(new THREE.BoxGeometry(S.bodyR * 1.6, S.bodyLen, S.bodyR * 1.6), matBlock);
+  block.position.y = -L + S.bodyStart + S.bodyLen / 2; headGroup.add(block);
+  const nz = new THREE.Mesh(new THREE.CylinderGeometry(S.shaftR, S.shaftR, S.bodyStart - 2, 16), matBrass);
+  nz.position.y = -L + 2 + (S.bodyStart - 2) / 2; headGroup.add(nz);
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(S.shaftR, 2, 16), matBrass); cone.rotation.x = Math.PI; cone.position.y = -L + 1; headGroup.add(cone);
+  tipObj = new THREE.Object3D(); tipObj.position.y = -L; headGroup.add(tipObj);
+  beadGeo = beadGeo || new THREE.CylinderGeometry(1, 1, 1, 6, 1, true);
+  const pg = new THREE.BufferGeometry();
+  pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(401 * 3), 3));
+  pg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(401 * 3), 3));
+  previewLine = new THREE.Line(pg, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 }));
+  previewLine.frustumCulled = false; bedGroup.add(previewLine);
+  if (beadMesh) bedGroup.add(beadMesh);
+  if (markerMesh) bedGroup.add(markerMesh);
+}
+
+const PAL = {
+  tilt: ['#3f8cff', '#e7eaee', '#ffab40'],
+  height: ['#1f6f86', '#8fd3c1', '#f4e27a'],
+  flow: ['#3f8cff', '#dfe3e8', '#ff5d5d'],
+  solid: '#e9e4d8',
+  support: ['#8e9aa7', '#b98bff', '#9b6bff', '#ff4f9a', '#ff9a3c', '#e9dfaa', '#e9dfaa'],
+};
+const cTilt = PAL.tilt.map(x => new THREE.Color(x));
+const cHeight = PAL.height.map(x => new THREE.Color(x));
+const cFlow = PAL.flow.map(x => new THREE.Color(x));
+const cSolid = new THREE.Color(PAL.solid);
+const cPrime = new THREE.Color('#5b6673');
+const SUPCOL = PAL.support.map(x => new THREE.Color(x));
+const lerp3 = (out, c, t) => t < 0.5 ? out.copy(c[0]).lerp(c[1], t * 2) : out.copy(c[1]).lerp(c[2], (t - 0.5) * 2);
+let beadYmax = 1;
+function colorBeads() {
+  if (!beadMesh) return;
+  const col = new THREE.Color(), n = P.beadTotal, med = P.flowMedian || 1;
+  beadYmax = 1; for (let s = 0; s < n; s++) beadYmax = Math.max(beadYmax, P.seg[s * 6 + 4]);
+  for (let s = 0; s < n; s++) {
+    if (view.color === 'tilt') {
+      const B = P.segB[s];
+      if (B < 0) col.copy(cTilt[1]).lerp(cTilt[0], Math.min(1, B / (S.bMin || -1)));
+      else col.copy(cTilt[1]).lerp(cTilt[2], Math.min(1, B / (S.bMax || 1)));
+    } else if (view.color === 'support') col.copy(lastSupport ? SUPCOL[lastSupport.status[s]] : SUPCOL[0]);
+    else if (view.color === 'height') lerp3(col, cHeight, Math.min(1, Math.max(0, P.seg[s * 6 + 4] / beadYmax)));
+    else if (view.color === 'flow' && P.segPrime[s]) col.copy(cPrime);
+    else if (view.color === 'flow') {
+      const r = P.segArea[s] / med;
+      if (r < 1) col.copy(cFlow[1]).lerp(cFlow[0], Math.min(1, (1 - r) / Math.max(0.01, 1 - S.flowLow)));
+      else col.copy(cFlow[1]).lerp(cFlow[2], Math.min(1, (r - 1) / Math.max(0.01, S.flowHigh - 1)));
+    }
+    else col.copy(cSolid);
+    beadMesh.setColorAt(s, col);
+  }
+  beadMesh.instanceColor.needsUpdate = true;
+  updateLegend();
+}
+function updateLegend() {
+  const el = $('#legend'); if (!el) return;
+  const grad = (cols, labels) => `<div class="lg-bar" style="background:linear-gradient(90deg,${cols.join(',')})"></div><div class="lg-lab">${labels.map(l => `<span>${l}</span>`).join('')}</div>`;
+  let html = '';
+  if (view.color === 'tilt') html = `<div class="lg-t">Nozzle tilt</div>` + grad(PAL.tilt, [`${S.bMin}°`, '0°', `${S.bMax}°`]);
+  else if (view.color === 'height') html = `<div class="lg-t">Height</div>` + grad(PAL.height, ['0', `${fmt(beadYmax / 2, 0)}`, `${fmt(beadYmax, 0)} mm`]);
+  else if (view.color === 'flow') html = `<div class="lg-t">Plastic per mm</div>` + grad(PAL.flow, [`${S.flowLow}×`, 'typical', `${S.flowHigh}×`]) + `<div class="lg-keys"><span><i style="background:#5b6673;height:10px;width:10px"></i>Prime / unretract (normal)</span></div>`;
+  else if (view.color === 'support') html = `<div class="lg-t">Support check</div><div class="lg-keys">${[['Supported', 0], ['Stray', 3], ['Overhang', 2], ['Bridge', 1], ['Short span', 5]].map(([t, k]) => `<span><i style="background:${PAL.support[k]}"></i>${t}</span>`).join('')}</div>`;
+  html += `<div class="lg-keys"><span><i style="background:#4fd1c5"></i>Next extrusion</span><span><i style="background:#f5a524"></i>Next travel</span><span><i class="dot" style="background:#ff5a5f"></i>Collision</span><span><i class="dot" style="background:#b98bff"></i>Floating</span><span><i class="dot" style="background:#f5b942"></i>Blob</span></div>`;
+  el.innerHTML = html;
+}
+function buildBeadMesh() {
+  if (beadMesh) { bedGroup.remove(beadMesh); if (beadMesh.dispose) beadMesh.dispose(); beadMesh = null; }
+  const n = P.beadTotal;
+  if (!n) return;
+  beadMesh = new THREE.InstancedMesh(beadGeo, matBead, n);
+  beadMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), d = new THREE.Vector3(), sc = new THREE.Vector3();
+  const r = S.beadWidth / 2;
+  for (let s = 0; s < n; s++) {
+    const o = s * 6;
+    a.set(P.seg[o], P.seg[o + 1], P.seg[o + 2]); b.set(P.seg[o + 3], P.seg[o + 4], P.seg[o + 5]);
+    d.subVectors(b, a); const len = d.length();
+    if (len < 1e-6) { m.makeScale(0, 0, 0); beadMesh.setMatrixAt(s, m); continue; }
+    d.divideScalar(len); q.setFromUnitVectors(up, d);
+    sc.set(r, len + r * 0.6, r);
+    m.compose(a.add(b).multiplyScalar(0.5), q, sc);
+    beadMesh.setMatrixAt(s, m);
+  }
+  beadMesh.frustumCulled = false; beadMesh.count = 0;
+  colorBeads();
+  bedGroup.add(beadMesh);
+}
+function buildMarkers() {
+  if (markerMesh) { bedGroup.remove(markerMesh); if (markerMesh.dispose) markerMesh.dispose(); markerMesh = null; }
+  const pri = { stray: 0, blob: 1, part: 2, bed: 3, float: 4 };
+  const pts = issues.filter(x => x.pos && x.kind in pri).sort((a, b) => pri[a.kind] - pri[b.kind]).slice(0, 1500);
+  if (!pts.length) return;
+  markerMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1.4, 10, 8), new THREE.MeshBasicMaterial({ color: '#ffffff' }), pts.length);
+  markerMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(pts.length * 3), 3);
+  const m = new THREE.Matrix4(), cRed = new THREE.Color('#ff5a5f'), cFloat = new THREE.Color('#c38bff'), cBlob = new THREE.Color('#f0b429');
+  pts.forEach((x, k) => { m.makeTranslation(x.pos[0], x.pos[1], x.pos[2]); markerMesh.setMatrixAt(k, m); markerMesh.setColorAt(k, x.kind === 'float' || x.kind === 'stray' ? cFloat : x.kind === 'blob' ? cBlob : cRed); });
+  markerMesh.frustumCulled = false; bedGroup.add(markerMesh);
+}
+
+// ---------- camera ----------
+const orbit = { target: new THREE.Vector3(40, 60, 0), r: 560, th: 1.25, ph: 1.15 };
+function placeCamera() {
+  const o = orbit;
+  camera.position.set(o.target.x + o.r * Math.sin(o.ph) * Math.cos(o.th), o.target.y + o.r * Math.cos(o.ph), o.target.z + o.r * Math.sin(o.ph) * Math.sin(o.th));
+  camera.lookAt(o.target);
+}
+(() => {
+  let drag = null, pinch = 0;
+  const el = renderer.domElement;
+  el.addEventListener('contextmenu', e => e.preventDefault());
+  el.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, btn: e.button, pan: e.button === 2 || e.shiftKey }; el.setPointerCapture(e.pointerId); });
+  el.addEventListener('pointerup', e => { if (drag && drag.btn === 0 && !e.shiftKey && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 5) pickBead(e.clientX, e.clientY); drag = null; });
+  el.addEventListener('pointermove', e => {
+    if (!drag || pinch) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+    if (drag.pan) {
+      const f = orbit.r * 0.0016, right = new THREE.Vector3(), upv = new THREE.Vector3();
+      camera.matrixWorld.extractBasis(right, upv, new THREE.Vector3());
+      orbit.target.addScaledVector(right, -dx * f).addScaledVector(upv, dy * f);
+      view.follow = false; $('#follow').checked = false;
+    } else { orbit.th += dx * 0.006; orbit.ph = Math.min(3.05, Math.max(0.08, orbit.ph - dy * 0.006)); }
+  });
+  el.addEventListener('wheel', e => { e.preventDefault(); orbit.r = Math.min(3000, Math.max(20, orbit.r * Math.pow(1.0015, e.deltaY))); }, { passive: false });
+  el.addEventListener('touchstart', e => { if (e.touches.length === 2) pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); }, { passive: true });
+  el.addEventListener('touchmove', e => { if (e.touches.length === 2 && pinch) { const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); orbit.r = Math.min(3000, Math.max(20, orbit.r * pinch / d)); pinch = d; } }, { passive: true });
+  el.addEventListener('touchend', () => { pinch = 0; });
+})();
+function resize() {
+  const w = vp.clientWidth, h = vp.clientHeight;
+  renderer.setSize(w, h); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(vp);
+
+// ---------- pose ----------
+const tmT = [0, 0, 0, 0], tmp3 = new THREE.Vector3(), tb = [0, 0, 0];
+function pose(X, Z, B, C) {
+  const L = S.nozzleOffset;
+  tipMachine(S, X, Z, B, tmT);
+  const r = tmT[0], y = tmT[1], sb = tmT[2], cb = tmT[3];
+  const px = r - L * sb, py = y + L * cb;
+  const th = rad(S.cSign * C);
+  bedGroup.rotation.y = th;
+  root.rotation.y = view.bedFrame ? -th : 0;
+  headGroup.position.set(px, py, 0); headGroup.rotation.z = rad(S.bSign * B);
+  const colX = Math.max(S.bedDiameter / 2, S.xMax) + 45;
+  const armStart = px + 8;
+  arm.scale.x = Math.max(1, colX - armStart); arm.position.set((colX + armStart) / 2, py, 0);
+  zCar.position.set(colX + 3, py, 0);
+}
+
+// ---------- preview of upcoming path ----------
+let lastPreviewI = -1;
+function updatePreview(i) {
+  if (!P || !view.preview) { previewLine.visible = false; return; }
+  previewLine.visible = true;
+  if (i === lastPreviewI) return; lastPreviewI = i;
+  const pos = previewLine.geometry.attributes.position, colr = previewLine.geometry.attributes.color;
+  let k = 0;
+  for (let j = i; j <= Math.min(P.n, i + 400); j++, k++) {
+    const b = j * 5;
+    tipMachine(S, P.act[b], P.act[b + 1], P.act[b + 2], tmT); machineToBed(S, tmT[0], tmT[1], 0, P.act[b + 3], tb);
+    pos.setXYZ(k, tb[0], tb[1] + 0.3, tb[2]);
+    const ext = j < P.n && P.type[j] === 1 && P.act[b + 9] > P.act[b + 4];
+    const fade = 1 - (j - i) / 420;
+    if (ext) colr.setXYZ(k, 0.31 * fade, 0.82 * fade, 0.77 * fade); else colr.setXYZ(k, 0.96 * fade, 0.65 * fade, 0.14 * fade);
+  }
+  previewLine.geometry.setDrawRange(0, k);
+  pos.needsUpdate = true; colr.needsUpdate = true;
+}
+
+// ---------- readouts ----------
+const fmt = (v, d = 2) => (isFinite(v) ? v.toFixed(d) : '—');
+const fmtT = s => { s = Math.max(0, s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = Math.floor(s % 60); return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
+let lastRead = 0, prevTip = null, prevTipT = 0;
+function readouts(now, s, c, i) {
+  if (now - lastRead < 90) return; lastRead = now;
+  tipMachine(S, s[0], s[1], s[2], tmT); machineToBed(S, tmT[0], tmT[1], 0, s[3], tb);
+  let tipV = 0;
+  if (prevTip && now > prevTipT) tipV = Math.hypot(tb[0] - prevTip[0], tb[1] - prevTip[1], tb[2] - prevTip[2]) / ((now - prevTipT) / 1000) / (manual.active || !playing ? 1 : speedMul);
+  prevTip = tb.slice(); prevTipT = now;
+  const [ma, mb] = motorsFrom(S, c[0], c[2], S.kinCheck);
+  const diff = kinDiffers(S);
+  const rows = [
+    ['X radius', fmt(s[0]) + ' mm', diff ? 'cmd ' + fmt(c[0]) : ''],
+    ['Z', fmt(s[1]) + ' mm', ''],
+    ['B tilt', fmt(s[2]) + '°', diff ? 'cmd ' + fmt(c[2]) : ''],
+    ['C bed', fmt(s[3], 1) + '°', fmt(((s[3] % 360) + 360) % 360, 1) + '° in turn'],
+    ['E (G-code)', fmt(s[4], 3) + ' mm', ''],
+    ['Tip on bed', 'r ' + fmt(Math.hypot(tb[0], tb[2]), 1) + '  z ' + fmt(tb[1], 2), ''],
+    ['Tip speed', playing && !manual.active ? fmt(tipV, 1) + ' mm/s' : '—', P && !manual.active && i < P.n ? (P.inv[i] ? 'G93: ' + fmt(60000 / P.feed[i], 1) + ' ms' : 'F ' + fmt(P.feed[i] / 60, 1) + ' mm/s') : ''],
+    ['Motor A', fmt(ma) + ' mm', Math.round(ma * S.xySteps) + ' steps'],
+    ['Motor B', fmt(mb) + ' mm', Math.round(mb * S.xySteps) + ' steps'],
+    ['Motor Z', Math.round(c[1] * S.zSteps) + ' steps', ''],
+    ['Motor C', Math.round(c[3] * S.cStepsPerDeg) + ' steps', ''],
+  ];
+  $('#readout').innerHTML = rows.map(r => `<div class="rk">${r[0]}</div><div class="rv">${r[1]}</div><div class="rs">${r[2]}</div>`).join('');
+  const mode = manual.active ? 'Jogging' : (P ? (playing ? 'Playing' : 'Paused') : 'No file');
+  const me = $('#mode'); me.textContent = mode; me.dataset.state = mode.toLowerCase().replace(' ', '');
+  if (P) {
+    $('#tnow').textContent = fmtT(T); $('#ttot').textContent = fmtT(P.total);
+    $('#moveinfo').textContent = `Move ${Math.min(i + 1, P.n).toLocaleString()} of ${P.n.toLocaleString()}`;
+    if (!scrubbing) $('#scrub').value = P.total ? Math.round(T / P.total * 10000) : 0;
+    const ln = i < P.n ? P.line[i] : P.lines.length - 1;
+    let html = '';
+    for (let k = Math.max(0, ln - 2); k <= Math.min(P.lines.length - 1, ln + 3); k++) {
+      const t = P.lines[k].replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      html += `<div class="gl${k === ln ? ' cur' : ''}"><span>${k + 1}</span>${t || '&nbsp;'}</div>`;
+    }
+    $('#gcode').innerHTML = html;
+  }
+}
+
+// ---------- main loop ----------
+let last = performance.now();
+function tick(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (P && playing && !manual.active) { T += dt * speedMul; if (T >= P.total) { T = P.total; setPlaying(false); } }
+  let s, c, i = 0;
+  if (manual.active) {
+    const vm = [S.vX, S.vZ, S.vB, S.vC];
+    for (let k = 0; k < 4; k++) { const d = manual.tgt[k] - manual.cur[k], step = vm[k] * 0.5 * dt; manual.cur[k] += Math.abs(d) <= step ? d : Math.sign(d) * step; }
+    s = [...manual.cur, P ? ST.s[4] : 0]; c = s;
+    if (P) stateAt(P, T, ST);
+    i = P ? ST.i : 0;
+  } else if (P) { stateAt(P, T, ST); s = ST.s; c = ST.c; i = ST.i; }
+  else { s = [S.homeX, S.homeZ, S.homeB, 0, 0]; c = s; }
+  pose(s[0], s[1], s[2], s[3]);
+  if (P && beadMesh) {
+    if (!view.beads) beadMesh.visible = false;
+    else {
+      beadMesh.visible = true;
+      let cnt = P.beadStart[Math.min(i, P.n)];
+      if (i < P.n) cnt += Math.floor((P.beadStart[i + 1] - P.beadStart[i]) * ST.frac);
+      beadMesh.count = cnt;
+    }
+  }
+  if (P) updatePreview(Math.min(i, P.n)); else if (previewLine) previewLine.visible = false;
+  if (view.follow) { tipObj.getWorldPosition(tmp3); orbit.target.lerp(tmp3, 0.15); }
+  placeCamera();
+  renderer.render(scene, camera);
+  readouts(now, s, c, i);
+  requestAnimationFrame(tick);
+}
+
+// ---------- loading ----------
+const busy = (on, text, frac) => {
+  $('#busy').hidden = !on;
+  if (text) $('#busytext').textContent = text;
+  $('#busybar').style.width = ((frac || 0) * 100).toFixed(1) + '%';
+};
+const nextFrame = () => new Promise(r => setTimeout(r, 0));
+async function rebuild(keepT) {
+  if (!srcLines) { buildMachine(); return; }
+  const frac = P && P.total ? T / P.total : 0;
+  busy(true, 'Reading ' + srcName, 0);
+  await nextFrame();
+  const Q = await parseGcode(S, srcLines, async f => { busy(true, 'Reading ' + srcName, f * 0.7); await nextFrame(); });
+  if (!Q.n) { busy(false); toast('No moves found. The file needs G0/G1 lines with C, X, Z, B, or E words.'); if (!P) showEmpty(true); return; }
+  busy(true, 'Planning motion', 0.75); await nextFrame();
+  computeActual(S, Q); plan(S, Q);
+  busy(true, 'Building beads', 0.85); await nextFrame();
+  buildBeadSegments(S, Q);
+  P = Q;
+  issues = []; lastSupport = null; issueFilter = null; $('#inspect').hidden = true; renderIssues(null); renderConventions(null); buildMarkers(); fileStats(); renderSlicer();
+  buildMachine(); buildBeadMesh();
+  lastPreviewI = -1;
+  T = keepT ? frac * P.total : 0;
+  busy(false); showEmpty(false);
+  $('#kinwarn').hidden = !kinDiffers(S);
+  $('#filename').textContent = srcName;
+  let w = P.warnings.slice();
+  if (P.beadTotal > 1500000) w.push('This file makes over 1.5 million bead segments, so the view may be slow. Raise bead smoothness in Settings.');
+  if (w.length) toast(w.join(' '));
+  fitView();
+}
+function fitView() {
+  if (!P) return;
+  let ymax = 10; for (let s = 0; s < P.beadTotal; s += 50) ymax = Math.max(ymax, P.seg[s * 6 + 4]);
+  orbit.target.set(0, Math.min(ymax / 2, 80), 0);
+}
+async function loadText(text, name) {
+  srcLines = text.split(/\r?\n/); srcName = name;
+  setPlaying(false); manual.active = false;
+  await rebuild(false);
+}
+$('#file').addEventListener('change', async e => { const f = e.target.files[0]; if (f) await loadText(await f.text(), f.name); e.target.value = ''; });
+document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => $('#file').click()));
+document.querySelectorAll('[data-demo]').forEach(b => b.addEventListener('click', () => loadText(demoGcode(S), 'demo-flared-cup.gcode')));
+vp.addEventListener('dragover', e => { e.preventDefault(); vp.classList.add('drop'); });
+vp.addEventListener('dragleave', () => vp.classList.remove('drop'));
+vp.addEventListener('drop', async e => { e.preventDefault(); vp.classList.remove('drop'); const f = e.dataTransfer.files[0]; if (f) await loadText(await f.text(), f.name); });
+function showEmpty(on) { $('#empty').hidden = !on; }
+let toastTimer;
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 9000); }
+
+// ---------- playback controls ----------
+const PLAY_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>';
+const PAUSE_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>';
+function setPlaying(on) {
+  if (on && !P) return;
+  if (on && P && T >= P.total) T = 0;
+  playing = on; if (on) manual.active = false;
+  $('#play').innerHTML = on ? PAUSE_ICON : PLAY_ICON;
+  $('#play').setAttribute('aria-label', on ? 'Pause' : 'Play');
+  $('#play').setAttribute('aria-pressed', on);
+}
+$('#play').addEventListener('click', () => setPlaying(!playing));
+$('#speed').addEventListener('change', e => speedMul = +e.target.value);
+function jumpMove(j) { if (!P) return; manual.active = false; setPlaying(false); j = Math.max(0, Math.min(P.n, j)); T = P.tStart[j] + (j < P.n ? P.dur[j] : 0); }
+$('#stepb').addEventListener('click', () => { if (P) jumpMove(findMove(P, T - 1e-9) - 1); });
+$('#stepf').addEventListener('click', () => { if (P) { const i = findMove(P, T); jumpMove(ST.frac >= 1 - 1e-9 ? i + 1 : i); } });
+$('#restart').addEventListener('click', () => { if (P) { T = 0; manual.active = false; } });
+let scrubbing = false;
+$('#scrub').addEventListener('input', e => { if (!P) return; scrubbing = true; manual.active = false; setPlaying(false); T = +e.target.value / 10000 * P.total; });
+$('#scrub').addEventListener('change', () => scrubbing = false);
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input, select, textarea')) return;
+  if (e.code === 'Space') { e.preventDefault(); setPlaying(!playing); }
+  else if (e.code === 'ArrowRight') $('#stepf').click();
+  else if (e.code === 'ArrowLeft') $('#stepb').click();
+});
+$('#bedframe').addEventListener('change', e => view.bedFrame = e.target.checked);
+$('#follow').addEventListener('change', e => view.follow = e.target.checked);
+$('#showbeads').addEventListener('change', e => view.beads = e.target.checked);
+$('#showpreview').addEventListener('change', e => { view.preview = e.target.checked; lastPreviewI = -1; });
+$('#colormode').addEventListener('change', e => { view.color = e.target.value; if (view.color === 'support' && !lastSupport && P) toast('Run the preflight check to color by support. Until then everything shows as supported.'); colorBeads(); updateLegend(); });
+
+// ---------- jog ----------
+function startManual() {
+  if (!manual.active) {
+    const s = P ? ST.s : [S.homeX, S.homeZ, S.homeB, 0];
+    manual.cur = [s[0], s[1], s[2], s[3]]; manual.tgt = manual.cur.slice();
+    manual.active = true; setPlaying(false);
+  }
+}
+document.querySelectorAll('[data-jog]').forEach(b => b.addEventListener('click', () => {
+  startManual();
+  const [ax, dir] = b.dataset.jog.split(':'); const k = { X: 0, Z: 1, B: 2, C: 3 }[ax];
+  const step = +$('#jogstep').value;
+  manual.tgt[k] += step * +dir;
+  if (k === 0) manual.tgt[0] = Math.min(S.xMax, Math.max(S.xMin, manual.tgt[0]));
+  if (k === 1) manual.tgt[1] = Math.min(S.zMax, Math.max(S.zMin, manual.tgt[1]));
+  if (k === 2) manual.tgt[2] = Math.min(S.bMax, Math.max(S.bMin, manual.tgt[2]));
+}));
+document.querySelectorAll('[data-home]').forEach(b => b.addEventListener('click', () => {
+  startManual();
+  const h = b.dataset.home;
+  if (h === 'X' || h === 'all') manual.tgt[0] = S.homeX;
+  if (h === 'Z' || h === 'all') manual.tgt[1] = S.homeZ;
+  if (h === 'B' || h === 'all') manual.tgt[2] = S.homeB;
+  if (h === 'C' || h === 'all') manual.tgt[3] = Math.round(manual.cur[3] / 360) * 360;
+}));
+$('#resume').addEventListener('click', () => { manual.active = false; });
+
+// ---------- preflight ----------
+let lastSupport = null, issueFilter = null, issueShown = 200;
+const KIND = { flow: ['Over hotend flow', 'warn'], over: ['Over-extrusion', 'info'], under: ['Under-extrusion', 'info'], stray: ['Stray pieces', 'err'], blob: ['Mid-air prime', 'warn'], float: ['Floating plastic', 'err'], part: ['Possible collision', 'err'], bed: ['Hits bed', 'err'], limit: ['Past axis limit', 'warn'], fast: ['Faster than F', 'warn'], slow: ['Slowed by axis limits', 'info'] };
+$('#runcheck').addEventListener('click', async () => {
+  if (!P) { toast('Open a G-code file first.'); return; }
+  setPlaying(false);
+  busy(true, 'Checking moves', 0); await nextFrame();
+  const col = await preflight(S, P, async f => { busy(true, 'Checking collisions and limits', f * 0.6); await nextFrame(); });
+  const sup = await supportCheck(S, P, async f => { busy(true, 'Checking for floating plastic', 0.6 + f * 0.4); await nextFrame(); }, true);
+  issues = col.concat(sup.issues).sort((a, b) => a.move - b.move);
+  lastSupport = sup; issueFilter = sup.strayCount ? 'stray' : null; issueShown = 200;
+  busy(false); renderIssues(issues); buildMarkers();
+  if (view.color === 'support') colorBeads();
+});
+function renderIssues(list) {
+  const box = $('#issues'), sum = $('#checksum');
+  if (!list) { box.innerHTML = ''; sum.textContent = 'Checks collisions, bed strikes, axis limits, speed, hotend flow, and floating plastic across the whole file.'; return; }
+  const tally = {}; list.forEach(x => tally[x.kind] = (tally[x.kind] || 0) + x.count);
+  const groups = {}; list.forEach(x => groups[x.kind] = (groups[x.kind] || 0) + 1);
+  if (issueFilter && !groups[issueFilter]) issueFilter = null;
+  const parts = Object.keys(KIND).filter(k => tally[k]).map(k => `<button class="pill ${KIND[k][1]}${issueFilter === k ? ' on' : ''}" data-kind="${k}" aria-pressed="${issueFilter === k}" title="Show only these">${KIND[k][0]}: ${groups[k].toLocaleString()} ${groups[k] === 1 ? 'spot' : 'spots'}</button>`);
+  sum.innerHTML = (list.length ? parts.join(' ') : '<span class="pill ok">No problems found</span>')
+    + (lastSupport ? `<br><span class="muted">${(lastSupport.floatLen / Math.max(1e-9, lastSupport.totalLen) * 100).toFixed(1)}% of the extruded path is floating${lastSupport.strayCount ? `, including ${lastSupport.strayCount.toLocaleString()} stray piece${lastSupport.strayCount > 1 ? 's' : ''}` : ''}${lastSupport.belowLen > 0.5 ? `, ${(lastSupport.belowLen / lastSupport.totalLen * 100).toFixed(1)}% is below the bed` : ''}.</span>` : '');
+  if (list.length) sum.innerHTML += `<br><span class="muted">${issueFilter ? 'Showing only ' + KIND[issueFilter][0].toLowerCase() + '. Click it again to show everything.' : 'Click a category to show only that kind.'}</span>`;
+  sum.querySelectorAll('[data-kind]').forEach(b => b.addEventListener('click', () => { issueFilter = issueFilter === b.dataset.kind ? null : b.dataset.kind; issueShown = 200; renderIssues(issues); }));
+  const shown = issueFilter ? list.filter(x => x.kind === issueFilter) : list;
+  box.innerHTML = (shown.length ? `<button id="copylines">Copy ${issueFilter ? KIND[issueFilter][0].toLowerCase() : 'all'} line numbers</button>` : '') + shown.slice(0, issueShown).map((x, k) => `<button class="issue ${KIND[x.kind][1]}" data-k="${k}"><b>${x.line === x.endLine ? 'Line ' + (x.line + 1) : 'Lines ' + (x.line + 1) + '–' + (x.endLine + 1)}</b><span>${x.text}${x.count > 1 ? ` (${x.count.toLocaleString()} moves)` : ''}</span></button>`).join('')
+    + (shown.length > issueShown ? `<p class="muted">Showing ${issueShown.toLocaleString()} of ${shown.length.toLocaleString()}.</p><button id="moreissues">Show ${Math.min(200, shown.length - issueShown)} more</button>` : '');
+  box.querySelectorAll('.issue').forEach(b => b.addEventListener('click', () => { const x = shown[+b.dataset.k]; jumpMove(x.endMove); inspectMove(x.endMove, x); }));
+  const more = $('#moreissues'); if (more) more.addEventListener('click', () => { issueShown += 200; renderIssues(issues); });
+  const cp = $('#copylines');
+  if (cp) cp.addEventListener('click', async () => {
+    const txt = shown.map(x => x.line === x.endLine ? String(x.line + 1) : `${x.line + 1}-${x.endLine + 1}`).join(',');
+    try { await navigator.clipboard.writeText(txt); }
+    catch { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    toast(`Copied ${shown.length.toLocaleString()} line ranges. Paste them after --drop-lines in s4_fix_strays.py.`);
+  });
+}
+
+// ---------- click a bead to inspect it ----------
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+function moveOfSeg(s) {
+  let lo = 0, hi = P.n - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (P.beadStart[mid] <= s) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+const STATUS_TEXT = [
+  () => 'Supported: the check found plastic or the bed under it.',
+  l => `Floating bridge, ${l.toFixed(1)} mm, held at both ends. Flagged because it is over the bridge limit.`,
+  l => `Overhang, ${l.toFixed(1)} mm, dangling off an edge. Flagged.`,
+  l => `Stray piece, ${l.toFixed(1)} mm, attached to nothing. Flagged.`,
+  () => 'Below the bed surface. Flagged.',
+  l => `Short bridge, ${l.toFixed(1)} mm, held at both ends. Under the bridge limit, so not flagged.`,
+  l => `Short overhang, ${l.toFixed(1)} mm. Under the overhang limit, so not flagged.`,
+];
+function pickBead(x, y) {
+  if (!P || !beadMesh || !beadMesh.visible || !beadMesh.count) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.set((x - rect.left) / rect.width * 2 - 1, -(y - rect.top) / rect.height * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObject(beadMesh, false);
+  if (!hits.length) { $('#inspect').hidden = true; return; }
+  const s = hits[0].instanceId;
+  inspectMove(moveOfSeg(s), null, s);
+}
+function inspectMove(i, issue, s) {
+  if (!P) return;
+  if (s === undefined) s = P.beadStart[i + 1] > P.beadStart[i] ? P.beadStart[i] : -1;
+  const b = (i + 1) * 5, ln = P.line[i];
+  const txt = (P.lines[ln] || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  let status;
+  if (issue) status = issue.text;
+  else if (s < 0) status = 'This move does not extrude.';
+  else if (!lastSupport) status = 'Run the preflight check to see whether this is supported.';
+  else status = STATUS_TEXT[lastSupport.status[s]](lastSupport.runLen[s]);
+  $('#inspectbody').innerHTML = `<div class="ih"><b>Line ${(ln + 1).toLocaleString()}</b><span class="muted">Move ${(i + 1).toLocaleString()}</span></div>
+    <div class="icode">${txt}</div>
+    <div class="muted">B ${fmt(P.cmd[b + 2], 2)}°, C ${fmt(P.cmd[b + 3], 1)}°, X ${fmt(P.cmd[b], 2)}, Z ${fmt(P.cmd[b + 1], 2)}</div>
+    <div>${status}</div>`;
+  $('#inspect').dataset.move = i;
+  $('#inspect').hidden = false;
+}
+$('#inspectjump').addEventListener('click', () => { const i = +$('#inspect').dataset.move; jumpMove(i); });
+$('#inspectclose').addEventListener('click', () => $('#inspect').hidden = true);
+
+// ---------- convention finder ----------
+const XZNAME = { tipAtB0: 'Tip at B = 0', pivot: 'B pivot', tip: 'Tip directly' };
+$('#findconv').addEventListener('click', async () => {
+  if (!P) { toast('Open a G-code file first.'); return; }
+  setPlaying(false);
+  busy(true, 'Trying each convention', 0); await nextFrame();
+  const res = await detectConventions(S, P, async f => { busy(true, 'Trying each convention', f); await nextFrame(); });
+  busy(false); renderConventions(res);
+});
+function renderConventions(res) {
+  const box = $('#convresult');
+  if (!res) { box.innerHTML = ''; return; }
+  const best = res[0];
+  let msg;
+  if (best.frac > 0.2) msg = `Every convention leaves at least ${(best.frac * 100).toFixed(0)}% of the plastic floating or below the bed, so the G-code itself is the likely problem, not these settings.`;
+  else if (res[1] && res[1].frac - best.frac < 0.01) msg = 'The top options score about the same. This file has too little tilt variation to tell them apart.';
+  else msg = 'The best match is highlighted. Choose Use to apply it.';
+  box.innerHTML = `<p class="muted">${msg}</p>` + res.map((r, k) => {
+    const cur = r.xzRef === S.xzRef && r.bSign === S.bSign;
+    return `<div class="conv${k === 0 ? ' best' : ''}"><span>X/Z = ${XZNAME[r.xzRef]}, B ${r.bSign === 1 ? 'normal' : 'reversed'}${cur ? ' <em>(current)</em>' : ''}</span><b>${(r.frac * 100).toFixed(1)}%</b>${cur ? '<i></i>' : `<button data-conv="${k}">Use</button>`}</div>`;
+  }).join('') + '<p class="muted">Percent of extruded path floating or below the bed.</p>';
+  box.querySelectorAll('[data-conv]').forEach(b => b.addEventListener('click', async () => {
+    const r = res[+b.dataset.conv]; S = { ...S, xzRef: r.xzRef, bSign: r.bSign }; await rebuild(true);
+  }));
+}
+function fileStats() {
+  if (!P) { $('#stats').innerHTML = ''; return; }
+  let bmin = Infinity, bmax = -Infinity, bminE = Infinity, bmaxE = -Infinity;
+  for (let s = 0; s <= P.n; s++) { const B = P.cmd[s * 5 + 2]; if (B < bmin) bmin = B; if (B > bmax) bmax = B; }
+  for (let s = 0; s < P.beadTotal; s++) { const B = P.segB[s]; if (B < bminE) bminE = B; if (B > bmaxE) bmaxE = B; }
+  const c0 = P.cmd[3], c1 = P.cmd[P.n * 5 + 3];
+  const fs = filamentStats(S, P);
+  const rows = [
+    ['Moves', P.n.toLocaleString()],
+    ['G93 inverse-time moves', (() => { let k = 0; for (let j = 0; j < P.n; j++) k += P.inv[j]; return k.toLocaleString(); })()],
+    ['Print time', fmtT(P.total)],
+    ['B while extruding', P.beadTotal ? `${fmt(bminE, 1)}° to ${fmt(bmaxE, 1)}°` : '—'],
+    ['B overall', `${fmt(bmin, 1)}° to ${fmt(bmax, 1)}°`],
+    ['C travel', `${fmt(Math.abs(c1 - c0) / 360, 0)} turns`],
+    ['Filament used', `${fmt(fs.net / 1000, 2)} m · ${fmt(fs.grams, 1)} g`],
+    ['Pushed / retracted', `${fmt(fs.pushed / 1000, 2)} m / ${fmt(fs.retracted / 1000, 2)} m`],
+    ['G92 E resets', fs.resets.toLocaleString()],
+  ];
+  $('#stats').innerHTML = rows.map(r => `<div class="rk">${r[0]}</div><div class="rv">${r[1]}</div><div></div>`).join('');
+}
+
+// ---------- slicer settings panel ----------
+const CURA_LABELS = {
+  layer_height: 'Layer height', layer_height_0: 'First layer height', line_width: 'Line width', wall_line_count: 'Wall lines',
+  wall_thickness: 'Wall thickness', top_layers: 'Top layers', bottom_layers: 'Bottom layers', infill_sparse_density: 'Infill density',
+  infill_pattern: 'Infill pattern', speed_print: 'Print speed', speed_travel: 'Travel speed', speed_wall_0: 'Outer wall speed',
+  retraction_enable: 'Retraction', retraction_amount: 'Retraction distance', retraction_speed: 'Retraction speed',
+  retraction_hop_enabled: 'Z hop', retraction_extra_prime_amount: 'Extra prime amount', material_print_temperature: 'Nozzle temperature',
+  material_bed_temperature: 'Bed temperature', cool_fan_speed: 'Fan speed', support_enable: 'Supports', support_type: 'Support placement',
+  adhesion_type: 'Adhesion', machine_center_is_zero: 'Origin at center', machine_gcode_flavor: 'G-code flavor',
+  magic_spiralize: 'Vase mode', relative_extrusion: 'Relative extrusion', coasting_enable: 'Coasting', wipe_hop_enable: 'Wipe Z hop',
+};
+const HEAD_LABELS = { 'Generated with': 'Slicer', FLAVOR: 'G-code flavor', 'Layer height': 'Layer height', TIME: 'Slicer time estimate', 'Filament used': 'Slicer filament estimate', LAYER_COUNT: 'Layer count', 'TARGET_MACHINE.NAME': 'Printer profile', NOZZLE_DIAMETER: 'Nozzle', MATERIAL: 'Material' };
+const SPEC = `; R-Theta Sim reads slicer settings from comments in the G-code.
+; Have the pipeline write these into the final file (the top is best):
+;
+; 1) Cura's header lines, copied as-is, for example:
+;FLAVOR:Marlin
+;Layer height: 0.3
+;Generated with Cura_SteamEngine 5.x
+;
+; 2) Cura's ;SETTING_3 lines from the end of Cura's output, copied as-is.
+;    They hold every setting changed from the profile defaults.
+;
+; 3) The S4 notebook's own parameters, one per line:
+; s4: model = benchy upsidedown tilted
+; s4: MAX_POS_ROTATION = deg2rad(3600)
+; s4: MAX_NEG_ROTATION = deg2rad(-3600)
+; s4: max_overhang_angle = 0
+; s4: PART_OFFSET = 0, 10, 0
+; s4: tetrahedralize = default (no maxvolume)
+; s4: ITERATIONS = 1000
+; s4: failed_points = 1846
+`;
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+function kvRows(obj, labels) {
+  return Object.entries(obj).map(([k, v]) => `<div class="rk" title="${esc(k)}">${esc(labels && labels[k] || k)}</div><div class="rv wrap">${esc(v)}</div><div></div>`).join('');
+}
+function renderSlicer() {
+  const box = $('#slicer');
+  if (!P) { box.innerHTML = '<p class="faint">Load a file to see what it says about how it was sliced.</p>'; return; }
+  const I = extractSlicerInfo(S, P), M = I.measured;
+  let h = '';
+  if (I.hasEmbedded) {
+    if (Object.keys(I.header).length) {
+      const hd = { ...I.header };
+      if (hd.TIME && /^\d+$/.test(hd.TIME)) hd.TIME = fmtT(+hd.TIME) + ' (for the deformed, flat-sliced model)';
+      h += `<h3 class="sub">From the slicer header</h3><div class="readout">${kvRows(hd, HEAD_LABELS)}</div>`;
+    }
+    const ck = Object.keys(I.cura);
+    if (ck.length) {
+      const known = {}, rest = {};
+      ck.forEach(k => (CURA_LABELS[k] ? known : rest)[k] = I.cura[k]);
+      h += `<h3 class="sub">Cura settings changed from the profile</h3><div class="readout">${kvRows(known, CURA_LABELS)}</div>`;
+      if (Object.keys(rest).length) h += `<details class="inner"><summary>${Object.keys(rest).length} more Cura settings</summary><div class="readout">${kvRows(rest)}</div></details>`;
+      h += `<p class="faint">Cura only records settings you changed. Anything missing is at its profile default.</p>`;
+    }
+    if (I.curaError) h += `<p class="muted">${I.curaError}</p>`;
+    if (Object.keys(I.s4).length) h += `<h3 class="sub">S4 parameters</h3><div class="readout">${kvRows(I.s4)}</div>`;
+    if (Object.keys(I.other).length) h += `<details class="inner"><summary>${Object.keys(I.other).length} other settings found</summary><div class="readout">${kvRows(I.other)}</div></details>`;
+  } else {
+    h += `<p class="muted">No slicer settings are written in this file. When the S4 notebook rewrites the G-code, Cura's comments appear to be dropped, and the settings can't be worked out from the moves alone. Below is what can be measured instead.</p>
+      <p class="muted">To see the real settings here, have the pipeline copy them into the G-code.</p>
+      <button class="btn sm" id="copyspec">Copy the format for Claude Code</button>`;
+    if (I.topComments.length) h += `<details class="inner"><summary>Comments at the top of the file</summary><div id="gcode">${I.topComments.map(t => `<div class="gl">${esc(t)}</div>`).join('')}</div></details>`;
+  }
+  const t = r => r ? (r.first === r.max ? `${fmt(r.first, 0)}` : `${fmt(r.first, 0)}, up to ${fmt(r.max, 0)}`) : 'Not set in file';
+  const rows = [
+    ['Extrusion mode', M.extrusion],
+    ['Feed mode', M.feedModes],
+    ['Nozzle temperature', M.nozzle ? t(M.nozzle) + ' °C' : 'Not set in file'],
+    ['Bed temperature', M.bed ? t(M.bed) + ' °C' : 'Not set in file'],
+    ['Fan', M.fan ? t(M.fan) + ' %' : 'Not set in file'],
+    ['Retraction', M.retractCount ? `${fmt(M.retract, 2)} mm${isFinite(M.retractSpeed) ? ' at ' + fmt(M.retractSpeed, 0) + ' mm/s' : ''} · ${M.retractCount.toLocaleString()}×` : 'None'],
+    ['Primes / unretracts', M.primeCount ? `${fmt(M.prime, 2)} mm · ${M.primeCount.toLocaleString()}×` : 'None'],
+    ['Print speed (asked)', isFinite(M.printSpeed) ? fmt(M.printSpeed, 0) + ' mm/s typical' : '—'],
+    ['Travel speed (asked)', isFinite(M.travelSpeed) ? fmt(M.travelSpeed, 0) + ' mm/s typical' : '—'],
+    ['Bead size', P.flowMedian ? `${fmt(P.flowMedian, 3)} mm² · ≈${fmt(P.flowMedian / (parseFloat(I.header['Layer height']) || S.layerH), 2)} mm wide` : '—'],
+  ];
+  h += `<h3 class="sub">Measured from the moves</h3><div class="readout">${rows.map(r => `<div class="rk">${r[0]}</div><div class="rv wrap">${r[1]}</div><div></div>`).join('')}</div>
+    <p class="faint">Speeds are what the G-code asks for, as the typical (median) value. The bead width assumes ${I.header['Layer height'] ? 'the layer height from the header' : `the ${S.layerH} mm layer height in Settings`}.</p>`;
+  box.innerHTML = h;
+  const cs = $('#copyspec');
+  if (cs) cs.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(SPEC); }
+    catch { const ta = document.createElement('textarea'); ta.value = SPEC; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    toast('Copied. Paste it to Claude Code and ask it to write these comments into the pipeline output.');
+  });
+}
+
+// ---------- settings ----------
+function buildSettings() {
+  const f = $('#settingsform'); f.innerHTML = '';
+  for (const g of SCHEMA) {
+    const fs = document.createElement('fieldset');
+    fs.innerHTML = `<legend>${g.group}</legend>`;
+    for (const [key, label, unit, hint, opts] of g.items) {
+      const id = 'set_' + key, row = document.createElement('div'); row.className = 'srow';
+      let input;
+      if (unit === 'select') input = `<select id="${id}">${opts.map(o => `<option value="${o[0]}"${String(S[key]) === o[0] ? ' selected' : ''}>${o[1]}</option>`).join('')}</select>`;
+      else if (unit === 'bool') input = `<input type="checkbox" id="${id}"${S[key] ? ' checked' : ''}>`;
+      else input = `<input type="number" step="any" id="${id}" value="${S[key]}"><span class="unit">${unit}</span>`;
+      const ph = hint === 'Placeholder' ? ' ph' : '';
+      row.innerHTML = `<label for="${id}">${label}</label><div class="sin">${input}</div>${hint ? `<div class="hint${ph}">${hint === 'Placeholder' ? 'Placeholder. Measure and replace.' : hint}</div>` : ''}`;
+      fs.appendChild(row);
+    }
+    f.appendChild(fs);
+  }
+}
+function readSettings() {
+  const next = { ...S };
+  for (const g of SCHEMA) for (const [key, , unit] of g.items) {
+    const el = $('#set_' + key);
+    if (unit === 'bool') next[key] = el.checked;
+    else if (unit === 'select') next[key] = (key === 'bSign' || key === 'cSign') ? +el.value : el.value;
+    else { const v = parseFloat(el.value); if (isFinite(v)) next[key] = v; }
+  }
+  return next;
+}
+function openSettings(on) { $('#settings').hidden = !on; if (on) { buildSettings(); $('#settings').querySelector('input,select').focus(); } }
+$('#opensettings').addEventListener('click', () => openSettings(true));
+$('#closesettings').addEventListener('click', () => openSettings(false));
+$('#applysettings').addEventListener('click', async () => { S = readSettings(); openSettings(false); await rebuild(true); if (!srcLines) buildMachine(); });
+$('#resetsettings').addEventListener('click', () => { S = JSON.parse(JSON.stringify(DEFAULTS)); buildSettings(); });
+$('#exportsettings').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(readSettings(), null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'r-theta-sim-settings.json'; a.click();
+});
+$('#importsettings').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try { S = { ...DEFAULTS, ...JSON.parse(await f.text()) }; buildSettings(); toast('Settings loaded. Choose Apply to use them.'); }
+  catch { toast('That file is not a settings JSON exported from this simulator.'); }
+  e.target.value = '';
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#settings').hidden) openSettings(false); });
+
+// ---------- start ----------
+buildMachine(); resize(); renderIssues(null); fileStats(); renderSlicer(); updateLegend(); setPlaying(false); showEmpty(true);
+requestAnimationFrame(tick);
+
+</script>
+</body>
+</html>
