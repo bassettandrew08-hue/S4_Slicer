@@ -18,9 +18,11 @@ Output-preserving changes vs. the notebook:
     mapper only needs connectivity, vertex positions and cell centres
 
 The least-squares objectives and solver settings are unchanged (including the squared
-residuals, i.e. the quartic penalty). See NOTES in the README before changing them.
+residuals, i.e. the quartic penalty). Changing them breaks the match with the notebook; re-run
+tools/check_equivalence.py after any edit here.
 """
 import base64
+import itertools
 import pickle
 
 import networkx as nx
@@ -137,7 +139,6 @@ def cell_face_maps(tet, cells, surface_mesh):
             hits = []
             # triangles with all 3 vertices inside S (what extract_points(adjacent_cells=False) keeps)
             if len(Sset) >= 3:
-                import itertools
                 for trip in itertools.combinations(sorted(Sset), 3):
                     hits.extend(tri_by_set.get(frozenset(trip), []))
             if hits:
@@ -145,7 +146,7 @@ def cell_face_maps(tet, cells, surface_mesh):
     return cell_to_face
 
 
-def update_attributes(tet, cells, cell_to_face, graph, compute_in_air=True, dijkstra_cache=None):
+def update_attributes(tet, cell_to_face, graph, compute_in_air=True, dijkstra_cache=None):
     """reference.update_tet_attributes, minus the unused path_to_bottom array. Returns dijkstra results."""
     surface_mesh = tet.extract_surface(algorithm='dataset_surface')
     n = tet.number_of_cells
@@ -216,7 +217,6 @@ def prepare_mesh(model_path, part_offset=(0., 0., 0.)):
         pairs = compute_neighbours(cells, tet.number_of_points)
         for kind, arr in pairs.items():
             tet.field_data[f"cell_{kind}_neighbours"] = arr
-        ctx.pairs = pairs
         ctx.nbr = neighbour_dicts(pairs, tet.number_of_cells)
 
     with TIMER("networkx graph (bulk)"):
@@ -234,7 +234,7 @@ def prepare_mesh(model_path, part_offset=(0., 0., 0.)):
         tet.add_field_data(base64.b64encode(pickle.dumps(ctx.cell_to_face)).decode('utf-8'), "cell_to_face")
         tet.add_field_data(cells, "cells")
         tet.add_field_data(tet.points, "cell_vertices")
-        mask, bottom, dist_b, paths_b = update_attributes(tet, cells, ctx.cell_to_face, ctx.graph)
+        mask, bottom, dist_b, paths_b = update_attributes(tet, ctx.cell_to_face, ctx.graph)
         tet.cell_data['overhang_angle'][bottom] = np.nan
         ctx.bottom_cells_mask, ctx.bottom_cells = mask, bottom
         ctx.distances_to_bottom, ctx.paths_to_bottom = dist_b, paths_b
@@ -244,12 +244,11 @@ def prepare_mesh(model_path, part_offset=(0., 0., 0.)):
 # --------------------------------------------------------------------- rotation field
 
 def planeFit(points):
-    from numpy.linalg import svd
     points = np.reshape(points, (np.shape(points)[0], -1))
     ctr = points.mean(axis=1)
     x = points - ctr[:, np.newaxis]
     M = np.dot(x, x.T)
-    return ctr, svd(M)[0][:, -1]
+    return ctr, np.linalg.svd(M)[0][:, -1]
 
 
 def path_length_to_base_gradient(ctx, tet, MAX_OVERHANG, INITIAL_ROTATION_FIELD_SMOOTHING, SET_INITIAL_ROTATION_TO_ZERO):
@@ -416,14 +415,14 @@ def calculate_deformation(tet, rotation_field, iterations, verbose=0):
     return res.x[:n_pts * 3].reshape(-1, 3)
 
 
-def next_iteration_mesh(ctx, prev_tet, new_vertices):
+def next_iteration_mesh(ctx, new_vertices):
     """Notebook cell 7 tail + cell 9: deformed mesh with attributes recomputed, ready for another iteration."""
     t = pv.UnstructuredGrid(ctx.tet.cells, np.full(ctx.tet.number_of_cells, pv.CellType.TETRA), new_vertices)
     t.field_data["cells"] = ctx.cells
     t.field_data["cell_vertices"] = t.points
     t.field_data["cell_face_neighbours"] = ctx.tet.field_data["cell_face_neighbours"]
     cached = (set(ctx.bottom_cells.tolist()), ctx.distances_to_bottom, ctx.paths_to_bottom)
-    update_attributes(t, ctx.cells, ctx.cell_to_face, ctx.graph, dijkstra_cache=cached)
+    update_attributes(t, ctx.cell_to_face, ctx.graph, dijkstra_cache=cached)
     return t
 
 
@@ -460,7 +459,7 @@ def deform(model_path, params=None, verbose=0):
             nv = deformation_step(tet, rf, p, last=(it == len(iterations) - 1), verbose=verbose)
         if it < len(iterations) - 1:
             with TIMER("attributes for next iteration"):
-                tet = next_iteration_mesh(ctx, tet, nv)
+                tet = next_iteration_mesh(ctx, nv)
     d = pv.UnstructuredGrid(ctx.tet.cells, np.full(ctx.tet.number_of_cells, pv.CellType.TETRA), nv)
     x_min, x_max, y_min, y_max, z_min, z_max = d.bounds
     d.points -= np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, z_min])
