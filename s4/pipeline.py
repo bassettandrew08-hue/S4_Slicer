@@ -136,6 +136,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
         stats["ungrounded_wall_mm"] = round(support["ungrounded_wall_mm"], 1)
         for k in ("island", "cantilever", "bridge"):  # floating runs by what their ends attach to
             stats[f"{k}_mm"] = round(support["runs"][k]["length_mm"], 1)
+            stats[f"{k}_wall_mm"] = round(support["runs"][k]["wall_mm"], 1)  # of it walls/skin, not sparse infill
     # the time R-Theta Sim will show for this file (same planner; the settings header is comments only)
     from . import print_time
     with TIMER("print-time estimate"):

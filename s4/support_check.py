@@ -122,21 +122,26 @@ def analyse(real, ext, layer, types, radius):
     def supported(i):
         return 0 <= i < len(P) and ext[i] and not floating[i]
     runs = np.split(fl, np.nonzero(np.diff(fl) > 1)[0] + 1) if len(fl) else []
-    classes = {"bridge": [0, 0.0, Counter()], "cantilever": [0, 0.0, Counter()], "island": [0, 0.0, Counter()]}
+    classes = {"bridge": [0, 0.0, Counter(), 0.0], "cantilever": [0, 0.0, Counter(), 0.0], "island": [0, 0.0, Counter(), 0.0]}
     for r in runs:
         a, b = supported(r[0] - 1), supported(r[-1] + 1)
         k = "bridge" if a and b else ("cantilever" if a or b else "island")
         chain = np.r_[r[0] - 1, r] if r[0] > 0 else r
+        length = float(np.sum(np.linalg.norm(np.diff(real[chain], axis=0), axis=1)))
         classes[k][0] += 1
-        classes[k][1] += float(np.sum(np.linalg.norm(np.diff(real[chain], axis=0), axis=1)))
+        classes[k][1] += length
         classes[k][2].update(types[i] for i in r)
+        # walls and skin share of the run: sparse infill floats a little even in a flat print (a flat cube with
+        # this profile shows FILL cantilevers too), walls and skin don't
+        classes[k][3] += length * float(np.mean([types[i] != "FILL" for i in r]))
 
     return {
         "ungrounded_mm": ug_mm,
         "ungrounded_real_mm": ug_len["real_mm"],  # true path length
         "ungrounded_wall_mm": ug_len["wall_mm"],  # of it, walls and skin (not sparse infill)
         "regions": regions,
-        "runs": {k: {"count": v[0], "length_mm": v[1], "types": v[2].most_common()} for k, v in classes.items()},
+        "runs": {k: {"count": v[0], "length_mm": v[1], "wall_mm": v[3], "types": v[2].most_common()}
+                 for k, v in classes.items()},
         "extruding_points": int(ext.sum()),
         "floating_points": int(len(fl)),
         "floating_pct": 100.0 * len(fl) / max(int(ext.sum()), 1),
@@ -184,9 +189,8 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     ug = ~g
     # path length each point stands for: half of the segments on either side of it within its run (points are ~0.5 mm
     # apart, so the old "count x seg_mm" understated the length)
-    point_len = 0.5 * (seg + np.r_[seg[1:], 0.0])
-    lone = point_len == 0  # a run of one point
-    point_len[lone] = seg_mm
+    # at least seg_mm per point, so plastic piled into one spot (a blob: points with no path length) still counts
+    point_len = np.maximum(0.5 * (seg + np.r_[seg[1:], 0.0]), seg_mm)
     typ = np.array([types[i] for i in ei], dtype=object)
     structural = ~np.isin(typ, ["FILL"])  # walls, skin: sparse infill floats a little even in flat prints
     real_mm = float(point_len[ug].sum()); wall_mm = float(point_len[ug & structural].sum())
