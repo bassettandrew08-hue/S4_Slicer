@@ -133,7 +133,7 @@ def analyse(real, ext, layer, types, radius):
         classes[k][2].update(types[i] for i in r)
         # walls and skin share of the run: sparse infill floats a little even in a flat print (a flat cube with
         # this profile shows FILL cantilevers too), walls and skin don't
-        classes[k][3] += length * float(np.mean([types[i] != "FILL" for i in r]))
+        classes[k][3] += length * float(np.mean([types[i] in STRUCTURAL for i in r]))
 
     return {
         "ungrounded_mm": ug_mm,
@@ -151,6 +151,9 @@ def analyse(real, ext, layer, types, radius):
         "floating_real_z": (float(real[fl, 2].min()), float(real[fl, 2].max())) if len(fl) else None,
         "radius_mm": radius,
     }
+
+
+STRUCTURAL = ("WALL-OUTER", "WALL-INNER", "SKIN")  # Cura ;TYPE: lines that carry the part (not FILL)
 
 
 def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
@@ -190,9 +193,10 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     # path length each point stands for: half of the segments on either side of it within its run (points are ~0.5 mm
     # apart, so the old "count x seg_mm" understated the length)
     # at least seg_mm per point, so plastic piled into one spot (a blob: points with no path length) still counts
-    point_len = np.maximum(0.5 * (seg + np.r_[seg[1:], 0.0]), seg_mm)
+    point_len = 0.5 * (seg + np.r_[seg[1:], 0.0])
+    point_len[point_len < 0.02] = seg_mm  # plastic piled into one spot (a blob) still counts; real points are further apart
     typ = np.array([types[i] for i in ei], dtype=object)
-    structural = ~np.isin(typ, ["FILL"])  # walls, skin: sparse infill floats a little even in flat prints
+    structural = np.isin(typ, STRUCTURAL)  # walls, skin: sparse infill floats a little even in flat prints
     real_mm = float(point_len[ug].sum()); wall_mm = float(point_len[ug & structural].sum())
     keep = ug[a] & ug[b]
     C = csr_matrix((np.ones(int(keep.sum())), (a[keep], b[keep])), shape=(n, n))
@@ -201,7 +205,7 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     for c in np.unique(lab[ug]):
         m = ug & (lab == c)
         L = Ly[m]
-        regions.append({"mm": float(m.sum() * seg_mm), "layers": (int(L.min()), int(L.max())),
+        regions.append({"mm": float(point_len[m].sum()), "layers": (int(L.min()), int(L.max())),
                         "centre": [round(float(v), 1) for v in Q[m].mean(0)],
                         "types": Counter(types[i] for i in ei[m]).most_common(2)})
     regions.sort(key=lambda r: -r["mm"])

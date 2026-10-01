@@ -15,7 +15,11 @@ islands. This module replaces only that step; the rotation field is still the no
    preconditioned with the mesh stiffness matrix.
 2. Island lifting. Priority-flood from the bed gives, for every vertex, the lowest height at which it can be
    reached from the bed by a path rising at least ISLAND_LIFT_SLOPE per mm. Vertices below that height sit in a
-   "pit" that would print in mid-air; they get soft height targets and the fold-free fit is re-solved, a few rounds.
+   "pit" that would print in mid-air; they get soft height targets and the fit is re-solved, a few rounds. The
+   targets only push up (LIFT_ONE_SIDED), the grounded vertices are anchored (LIFT_ANCHOR), and every vertex that
+   isn't in a pit is held at its fit-only height (LIFT_HOLD), so only the pits move: an unanchored lift mostly moved
+   the whole part up, and its stale targets pulled vertices back down (creases). The lift solves use their own
+   preconditioner floor (LIFT_PRECOND_FLOOR) so vertices held only by micro-tets don't take huge steps.
 
 Deterministic: all per-tet work is written to arrays and reduced serially.
 """
@@ -254,7 +258,6 @@ class FitProblem:
         # Vertices attached only through near-flat micro-tets have almost no stiffness, and the preconditioned step
         # blows up there (then the fold-free cap shrinks every step to ~nothing). Floor each vertex's stiffness.
         self.K_raw = K
-        dK = K.diagonal()
         self.set_precond_floor(precond_floor)
 
     def set_precond_floor(self, precond_floor):
@@ -477,7 +480,8 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
             anchor = (g0, V[g0, 2].copy(), float(q["LIFT_ANCHOR"]) * w[g0], np.zeros(len(g0), bool))
         if float(q["LIFT_PRECOND_FLOOR"]) >= 0 and float(q["LIFT_PRECOND_FLOOR"]) != float(q["PRECOND_FLOOR"]):
             prob.set_precond_floor(float(q["LIFT_PRECOND_FLOOR"]))
-        hold_w = np.full(len(P0), float(q["LIFT_HOLD"]) * float(q["LIFT_WEIGHT"]))
+        # no hold together with the bed pin: both fix z near the base and the lift squeezes the tets between them
+        hold_w = np.full(len(P0), 0.0 if pin is not None else float(q["LIFT_HOLD"]) * float(q["LIFT_WEIGHT"]))
         V_fit = V.copy()
         held = np.ones(len(P0), bool)
         if anchor is not None:

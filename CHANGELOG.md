@@ -6,6 +6,61 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
 
 ---
 
+## 2026-10-02: Smoother lifted surfaces without losing support; six-model quality suite
+
+### Changed
+- **New default island lift** (`s4/island_free.py`). The pi's bridge underside printed as a rough zig-zag patch.
+  The cause was the lift, not the turntable axis the bridge sits on:
+  - nothing held the part down while lifting, so the lift mostly moved the whole part up (pi: ~4.9 mm everywhere,
+    ~1 mm of real lift under the bridge)
+  - targets kept from earlier rounds, being two-sided, then pulled vertices back down: creases
+  - a pit's rim got dragged up round after round
+
+  Now the grounded vertices are anchored (`LIFT_ANCHOR` 1), only the pits are pushed up (`LIFT_ONE_SIDED`), and
+  every vertex that isn't in a pit is held where the fit put it (`LIFT_HOLD` 0.2). The lift solves also get their
+  own solver stiffness floor (`LIFT_PRECOND_FLOOR` 0.3); without it, Squirtle's dense cluster of tiny tets was
+  torn apart and printed about 5 mm of wall as a blob. The old lift is `LIFT_ANCHOR=0 LIFT_ONE_SIDED=false
+  LIFT_HOLD=0 LIFT_PRECOND_FLOOR=-1`. The part stays where it was, and the rotation field (Byrd's math) is
+  unchanged.
+
+### Results (six models, default settings; unsupported walls/skin = the part that matters structurally)
+
+| model | unsupported, total (walls/skin) | islands | cantilevers, walls/skin | roughness | pi bridge underside |
+|---|---|---|---|---|---|
+| pi | 0 → 0 (0 → 0) | 0 → 0 | 0 → 0 | 290 → 213 | 64 → 31 |
+| benchy | 57.3 → 41.4 (23.1 → 21.9) | 26.8 → 10.5 | 4.1 → 1.0 | 5576 → 5231 | |
+| Squirtle | 4.8 → 0.6 (4.8 → 0.7) | 0 → 1.3 | 8.4 → 4.6 | 2659 → 2134 | |
+| dino | 11.1 → 11.1 (5.0 → 4.9) | 8.6 → 8.4 | 25.1 → 24.5 | 3174 → 3163 | |
+| z mount | 2.7 → 0.3 (3.6 → 0.3) | 4.1 → 0.8 | 2.2 → 0 | 1564 → 1389 | |
+| B-axis mount | 2.7 → 1.5 (2.2 → 1.3) | 3.4 → 1.8 | 12.5 → 13.0 | 3695 → 3541 | |
+
+Old lift vs new lift on the same code and metrics (`tools/model_suite.py`, old lift via its settings). Squeezed
+volume (tets below half their volume) is about the same: benchy 3.3% → 2.3%, others within ±0.3%, none inverted.
+
+No poles, no extrusion along the nozzle axis, tilt unchanged or slightly up. The one new item is Squirtle's
+1.3 mm skin dot (two points), which is in the fit's own shape: it prints with lifting off too.
+
+### Added
+- **`tools/model_suite.py`:** slices all six models and flags regressions against a baseline run.
+- **`s4/quality.py`:** the sim's path-roughness measure in Python.
+- **Support check numbers:**
+  - true unsupported path length (it counted 0.3 mm per point, but points are ~0.5 mm apart)
+  - plastic piled into one spot (a blob) counts too
+  - walls/skin vs sparse infill for every class: `ungrounded_wall_mm`, `island_wall_mm`, `cantilever_wall_mm`
+
+### Fixed
+- **`tools/check_equivalence.py`** now requires the final G-code to be byte-identical, apart from the
+  `planar_gcode` line (the `--sliced-gcode` run names its planar file). Before, it only printed the result.
+
+### Tried and not adopted (measured on all six models)
+- **Fading the tilt near the turntable axis:** didn't help the pi, and cost Squirtle and benchy support.
+- **Smaller `SEG_SIZE`, or splitting paths exactly at tet faces:** the exact path is itself rough where tets are
+  squashed, and the 0.6 mm sampling hides some of it. Both made the pi bridge worse.
+- **A minimum tet weight in the fit:** didn't close Squirtle's tear cleanly.
+- **Moving the part off the axis:** helped the bridge, but moved the part and left cantilevers at the pi pillars.
+
+---
+
 ## 2026-10-01: Bug fixes, cleanup, path-roughness view
 
 ### Added

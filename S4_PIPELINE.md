@@ -139,6 +139,9 @@ extrusion line of such a point (normal bridging and overhang reach). Everything 
 island, plus every layer stacked on top of it. The largest ungrounded regions are listed with their layers and
 position.
 
+It gives the true path length, and how much of it is walls and skin. Sparse gyroid infill floats a little even in
+a flat print (a flat 30 mm cube with this profile shows ~30 mm), so the walls/skin number is the one that matters.
+
 The lines after that are a finer, local view. They count points with nothing printed earlier within 1 mm, sorted by
 what the ends of each run connect to:
 
@@ -230,6 +233,9 @@ Every section and key is optional; anything left out keeps its default.
 | `PENALTY_ITERATIONS`, `LIFT_ITERATIONS` | 300, 100 | `penalty`: solver iterations for the fit, and per lifting round |
 | `BED_PIN_WEIGHT`, `BED_TOL` | 0, 0.3 | `island_free`: the bed face (vertices within `BED_TOL` mm of the lowest point) always counts as supported. `BED_PIN_WEIGHT` > 0 also holds it flat on the bed; off by default, since it costs tilt and support (benchy: 1475 mm unsupported at 500) |
 | `LIFT_WEIGHT` | 50 | `island_free`: strength of the lift targets. Too weak and the fold penalty wins over the lift, leaving islands (Squirtle kept an unsupported tower at 5) |
+| `LIFT_ANCHOR`, `LIFT_ONE_SIDED`, `LIFT_HOLD` | 1, true, 0.2 | `island_free`: while lifting, the grounded vertices (anchor) and every vertex that isn't in a pit (hold, × `LIFT_WEIGHT`) stay where the fit put them, and only the pits are pushed up (one-sided). The old lift (0, false, 0) moved the whole part up and creased surfaces |
+| `LIFT_HOLD_FALLOFF` | 0 | `island_free`: mm over which the hold ramps up with distance from a pit (fewer creases, but costs support on some models) |
+| `LIFT_PRECOND_FLOOR` | 0.3 | `island_free`: solver stiffness floor for the lift solves only (`-1` = the fit's `PRECOND_FLOOR`). Without it a dense cluster of tiny tets (Squirtle) gets torn apart |
 | `FLIP_FREE_STAGES`, `FLIP_FREE_STAGE_ITERATIONS`, `BARRIER_WEIGHT` | 10, 150, 0.02 | `barrier` only: tilt ramp stages and barrier strength |
 | `SLIVER_QUALITY`, `MICRO_TET_VOLUME` | 0.03, 1e-3 | `barrier` only: badly shaped or tiny tets get no barrier (they would stall it) |
 
@@ -291,6 +297,15 @@ venv\Scripts\python s4_slice.py model.stl --notebook-exact
 venv\Scripts\python tools\run_reference.py map --model M.stl --out DIR --sliced planar.gcode --deformed-pkl pickle_files/deformed_M.pkl
 ```
 - `compare_gcode.py` compares any two 4-axis files, with tolerances.
+- `model_suite.py` slices all six test models (in parallel) and reports structure (ungrounded, island, cantilever:
+  walls/skin and total), poles, extrusion along the nozzle axis, tilt, roughness (the sim's path-roughness count,
+  `s4/quality.py`) and print time. With `--baseline DIR` (an earlier `--out`) it flags regressions. Run it before
+  changing any default: a fix for one model must not hurt the others.
+  ```
+  venv\Scripts\python tools\model_suite.py --out build/suite/base
+  venv\Scripts\python tools\model_suite.py --out build/suite/try --set KEY=VALUE --baseline build/suite/base
+  ```
+  The roughness count depends on point spacing, so compare it only between runs with the same `SEG_SIZE`.
 - `check_print_time.py` checks that the pipeline's print-time estimate (`s4/print_time.py`) equals R-Theta Sim's on
   the fixtures in `tools/fixtures/`. Run it after changing either planner, and refresh its expected numbers from the
   sim (the script says how).
@@ -350,8 +365,13 @@ Why each of these was needed, with measurements, is in the [changelog](CHANGELOG
 
 ## 9. Known limitations
 
-- **A little ungrounded plastic remains** (benchy: about 30–50 mm, mostly top skin and infill at the top of the hull;
-  that's skin laid over sparse infill, which is normal bridging). Raising `ISLAND_LIFT_SLOPE` is stricter but distorts
+- **A little ungrounded plastic remains** (benchy: about 40 mm, mostly top skin and infill at the top of the hull;
+  that's skin laid over sparse infill, which is normal bridging).
+- **A part centred on the turntable** (all the test models are) needs fast C rotation where its paths pass near the
+  axis: about 57°/r per mm of path. That is the machine's geometry, not a defect. The axis speed limits slow those
+  moves down.
+- **Squirtle has a 1.3 mm skin dot** at about (−10, −1, 31). It is in the shape the fit produces (it prints with
+  lifting off too). The old lift hid it only by moving the whole part up about 0.1 mm. Raising `ISLAND_LIFT_SLOPE` is stricter but distorts
   the part more.
 - **`island_free` changes the shape Cura slices**, so its output differs from the notebook's (by design). Vertex
   positions are deterministic run to run.

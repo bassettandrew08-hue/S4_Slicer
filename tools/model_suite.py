@@ -44,7 +44,10 @@ def run_model(model, out, extra, python):
     return model, measure(model, gc, log, time.time() - t)
 
 
-def measure(model, gc, log="", seconds=None):
+def measure(model, gc, log=None, seconds=None):
+    """Metrics of one finished run. log=None: the run's log is missing, so the [quality] counts are unknown."""
+    if not os.path.exists(gc):
+        return {"error": f"no G-code at {gc}"}
     hdr = {}
     with open(gc, errors="replace") as fh:
         for line in fh:
@@ -55,11 +58,12 @@ def measure(model, gc, log="", seconds=None):
                 break
     num = lambda k, d=None: float(hdr[k]) if k in hdr and re.match(r"^-?[\d.]+(e-?\d+)?$", hdr[k]) else d
     r = quality.path_roughness(gc, num("NOZZLE_OFFSET", 42.0))
-    m = re.search(r"extruding along the nozzle axis[^:]*: (\d+)", log)
+    m = re.search(r"extruding along the nozzle axis[^:]*: (\d+)", log or "")
     res = {k: num(k) for k in ("ungrounded_mm", "ungrounded_wall_mm", "island_wall_mm", "cantilever_wall_mm", "island_mm", "cantilever_mm", "bridge_mm", "poles",
                                "estimated_print_time_min")}
     res.update(tilt_deg=num("deform.tilt_deg"), target_tilt_deg=num("deform.target_tilt_deg"),
-               along_axis=int(m.group(1)) if m else 0, zigzag=r["count"], segments=r["segments"],
+               along_axis=int(m.group(1)) if m else (0 if log is not None else None), zigzag=r["count"],
+               segments=r["segments"],
                seconds=round(seconds, 1) if seconds else None)
     for name, box in REGIONS.get(model, {}).items():
         mid = r["mid"]; inside = (r["rough"] > 30)
@@ -70,11 +74,13 @@ def measure(model, gc, log="", seconds=None):
 
 
 def compare(res, base):
-    """Regressions of res against base (same model)."""
-    bad = []
+    """Regressions of res against base (same model), and notes on metrics that could not be compared."""
+    bad, notes = [], []
     for k, (how, tol) in CHECKS.items():
         a, b = res.get(k), base.get(k)
         if a is None or b is None:
+            if (a is None) != (b is None):
+                notes.append(f"{k} not compared ({'baseline' if b is None else 'this run'} lacks it)")
             continue
         if (how == "up" and a > b + tol) or (how == "down" and a < b - tol) or \
                 (how == "up_rel" and a > b * (1 + tol) + 5):
@@ -82,7 +88,7 @@ def compare(res, base):
     for k in res:
         if k.startswith("zigzag_") and k in base and res[k] > base[k] * 1.1 + 3:
             bad.append(f"{k} {base[k]:g} -> {res[k]:g}")
-    return bad
+    return bad, notes
 
 
 def main():
@@ -101,7 +107,7 @@ def main():
     if a.measure_only:
         for mdl in a.models:
             gc = os.path.join(a.out, f"{mdl}.gcode")
-            log = open(os.path.join(a.out, f"{mdl}.log"), errors="replace").read() if os.path.exists(gc[:-6] + ".log") else ""
+            log = open(gc[:-6] + ".log", errors="replace").read() if os.path.exists(gc[:-6] + ".log") else None
             results[mdl] = measure(mdl, gc, log)
     else:
         with cf.ThreadPoolExecutor(a.jobs) as ex:
@@ -122,9 +128,10 @@ def main():
         reg = " ".join(f"{k[7:]}={v}" for k, v in r.items() if k.startswith("zigzag_"))
         print(f"{mdl:26s}" + "".join(f"{('-' if r.get(c) is None else f'{r[c]:g}'):>12s}" for c in cols) + f"  {reg}")
         if mdl in base and "error" not in base[mdl]:
-            bad = compare(r, base[mdl])
+            bad, notes = compare(r, base[mdl])
             regressions += bool(bad)
-            print(f"{'':26s}  {'REGRESSION: ' + '; '.join(bad) if bad else 'ok vs baseline'}")
+            print(f"{'':26s}  {'REGRESSION: ' + '; '.join(bad) if bad else 'ok vs baseline'}"
+                  + (f"  (note: {'; '.join(notes)})" if notes else ""))
     print(f"settings: {a.set} {a.cura_set}  ->  {a.out}")
     return 1 if regressions else 0
 
