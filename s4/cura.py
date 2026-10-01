@@ -174,6 +174,10 @@ class CuraProject:
 
     # ---------------------------------------------------------------- loading
     def _load_3mf(self, path):
+        """Read the project's global and extruder stacks from the .3mf: each stack's containers (user, quality_changes,
+        intent, quality, material, variant, definition_changes; highest priority first) as {setting: raw value} dicts,
+        material values from the embedded .xml.fdm_material files, and the machine/extruder definition chains.
+        """
         with zipfile.ZipFile(path) as zf:
             names = zf.namelist()
             cfgs = {}
@@ -272,6 +276,13 @@ class CuraProject:
         return None, False
 
     def value(self, stack, key):
+        """Resolved value of setting key on stack (self.gstack or self.estack), as the Cura GUI would compute it. Cached.
+
+        Extruder lookups of settings that are not settable per extruder read the global stack. On the global stack a
+        definition's 'resolve' wins unless the user container sets the key, and limit_to_extruder settings are read
+        from the extruder. Otherwise the first container (or definition) value is used, '=expressions' evaluated in
+        this stack's context. A setting that refers to itself while being resolved gets its default_value.
+        """
         if key in stack.cache:
             return stack.cache[key]
         if stack is self.estack and not self.settable_per_extruder(key):
@@ -312,6 +323,12 @@ class CuraProject:
         return v
 
     def _eval(self, stack, key, expr):
+        """Evaluate a Cura '=expression' (without the '=') for setting key, in the context of stack.
+
+        Setting names in the expression are bound to their resolved values on the same stack, and Cura's helper
+        functions (extruderValue, resolveOrValue, ...) are stubbed for a single-extruder machine. If evaluation fails,
+        key is recorded in self.failed and its definition default_value is returned.
+        """
         proj = self
 
         def extruder_value(_pos, k):
@@ -427,6 +444,13 @@ def build_settings(threemf, overrides=None, cura_engine=None):
 
 
 def slice_stl(stl_path, out_gcode, threemf, overrides=None, cura_engine=None, log=print, threads=None):
+    """Slice stl_path with headless CuraEngine into out_gcode, with every setting resolved from the Cura project
+    threemf plus overrides ({setting: value}, user-container priority).
+
+    The resolved global values go into a generated .def.json (-j), extruder values that differ from them as
+    -e0 -s key=value. Checks the settings S4 relies on (S4_REQUIRED) first and writes CuraEngine's log next to
+    out_gcode. Returns {'global': values, 'extruder': values, 'args': command line, 'project': CuraProject}.
+    """
     proj, g, e = build_settings(threemf, overrides, cura_engine)
     for k, want in S4_REQUIRED.items():
         got = e.get(k, g.get(k))

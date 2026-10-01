@@ -27,6 +27,17 @@ def planar_retraction(planar_path, default=1.0):
 def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_engine=None, sliced_gcode=None,
         save_gif=False, save_pickle=False, support_check=True, params=None, log=print):
     """
+    STL -> 4-axis G-code at out_gcode. Stages:
+      1. deform: tetgen mesh, rotation field, deformed mesh (fast_deform / island_free, or reference.deform)
+         -> <work_dir>/<model>_deformed_tet.stl and deformed_points.npy
+      2. slice: CuraEngine on the deformed STL (skipped with sliced_gcode)
+      3. map: planar G-code back to the 4-axis machine (fast_map, or reference.map_gcode), then the axis speed
+         limits (feed_limits, if LIMIT_AXIS_SPEEDS)
+      4. support check (support_check), then the poles / along-the-nozzle-axis check (quality) and the
+         print-time estimate (print_time)
+      5. settings header for R-Theta Sim (sim_header) prepended to the G-code; timings_<impl>.json
+    The fast and reference branches must give identical results (tools/check_equivalence.py).
+
     profile: build profile from s4.profile.resolve() (deform / map / cura settings). None = defaults.
     params: shortcut for a partial profile dict (e.g. {"deform": {...}} or a legacy flat params dict).
     impl: "fast" (default) or "reference" (the verified notebook port, slow).
@@ -45,7 +56,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
         # inside the part as a floating blob; the S4 header already primes at home (G1 E10).
         overrides["machine_start_gcode"] = "G28 ; home"
     name = os.path.splitext(os.path.basename(model_path))[0]
-    work_dir = work_dir or os.path.join("build", name)
+    work_dir = work_dir or os.path.join(profiles.HERE, "build", name)  # profiles.HERE: the repo root
     os.makedirs(work_dir, exist_ok=True)
     os.makedirs(os.path.dirname(os.path.abspath(out_gcode)), exist_ok=True)
     with open(os.path.join(work_dir, "params_used.json"), "w", encoding="utf-8") as fh:
@@ -54,6 +65,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     planar_path = sliced_gcode or os.path.join(work_dir, f"{name}_deformed_tet.gcode")
     t0 = time.perf_counter()
     from . import support_check as sc  # heavy imports (open3d, pyvista): only when a run starts
+    from . import quality
 
     with TIMER(f"TOTAL ({impl})"):
         # ---- 1. deform
@@ -86,12 +98,14 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
         if sliced_gcode is None:
             with TIMER("2. slice (CuraEngine)"):
                 from .cura import slice_stl
-                cura_info = slice_stl(stl_path, planar_path, profiles.cura_config_path(prof), overrides, cura_engine, log=log)
+                cura_info = slice_stl(stl_path, planar_path, profiles.cura_config_path(prof), overrides, cura_engine,
+                                      log=log)
         else:
             log(f"[slice] using existing planar G-code {sliced_gcode}")
         retraction = 1.0
         if cura_info:
-            retraction = float(cura_info["extruder"].get("retraction_amount", cura_info["global"].get("retraction_amount")))
+            retraction = float(cura_info["extruder"].get("retraction_amount",
+                                                         cura_info["global"].get("retraction_amount")))
         else:  # sliced elsewhere: the mapper must know the file's retraction to recognise retract/unretract moves
             retraction = planar_retraction(planar_path, default=retraction)
             log(f"[slice] retraction length in that file: {retraction:g} mm")
@@ -128,7 +142,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
                                    seg_size=mp["SEG_SIZE"])
             stats["floating_points"] = support["floating_points"]
             log(sc.format_report(support))
-    poles = sc.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"], retraction=retraction)
+    poles = quality.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"], retraction=retraction)
     stats["poles"] = len(poles[0])
     if support_check:
         stats["ungrounded_mm"] = round(support["ungrounded_mm"], 1)
@@ -160,7 +174,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     header = sim_header.build(name, shown, stats, planar_path, info, _fd.LAST_DEFORM_INFO,
                               sliced_by_cura_here=sliced_gcode is None)
     sim_header.prepend(out_gcode, header)
-    log(sc.format_vertical(poles, line_offset=len(header)))  # line numbers in the final file
+    log(quality.format_vertical(poles, line_offset=len(header)))  # line numbers in the final file
     total = time.perf_counter() - t0
     log(f"[map] {stats}")
     log(f"[done] {out_gcode}  ({total:.1f} s)")

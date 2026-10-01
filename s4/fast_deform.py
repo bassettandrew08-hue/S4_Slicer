@@ -32,7 +32,7 @@ from scipy.optimize import least_squares
 from scipy.sparse import csr_matrix
 
 from .timing import TIMER
-from . import meshio_s4
+from . import geometry, meshio_s4
 from .fast_lsq import FastJacobian, fast_trf
 
 up_vector = np.array([0, 0, 1])
@@ -84,7 +84,8 @@ def compute_neighbours(cells, n_points):
     face_inv, face_groups = _group_cells_by_key(face_keys)
 
     result = {}
-    for kind, inv, groups in (("point", point_inv, point_groups), ("edge", edge_inv, edge_groups), ("face", face_inv, face_groups)):
+    for kind, inv, groups in (("point", point_inv, point_groups), ("edge", edge_inv, edge_groups),
+                              ("face", face_inv, face_groups)):
         inv_l = inv.tolist()
         pairs = []
         for c in range(n_cells):
@@ -252,6 +253,14 @@ def planeFit(points):
 
 
 def path_length_to_base_gradient(ctx, tet, MAX_OVERHANG, INITIAL_ROTATION_FIELD_SMOOTHING, SET_INITIAL_ROTATION_TO_ZERO):
+    """Notebook calculate_path_length_to_base_gradient: per cell, which way the tilt should go.
+
+    For overhang cells (surface faces steeper than MAX_OVERHANG, not on the bottom) take the path length through
+    the mesh to the bottom, fit a plane to it over the cell's edge neighbours and dot its gradient with the radial
+    direction: +/- says whether the path to the base grows outward or inward. Then one smoothing pass over point
+    neighbours. Cells without a value get NaN (or 0 with SET_INITIAL_ROTATION_TO_ZERO). Also stored in
+    tet.cell_data['path_length_to_base_gradient'].
+    """
     # tet: the mesh being deformed this iteration; ctx: original mesh (the notebook's globals:
     # neighbour graph, bottom_cells and its Dijkstra search are always those of the input mesh)
     n = tet.number_of_cells
@@ -321,7 +330,8 @@ def path_length_to_base_gradient(ctx, tet, MAX_OVERHANG, INITIAL_ROTATION_FIELD_
 
 def initial_rotation_field(ctx, tet, p):
     irf = np.abs(np.deg2rad(90 + p["MAX_OVERHANG"]) - tet.cell_data['overhang_angle'])
-    grad = path_length_to_base_gradient(ctx, tet, p["MAX_OVERHANG"], p["INITIAL_ROTATION_FIELD_SMOOTHING"], p["SET_INITIAL_ROTATION_TO_ZERO"])
+    grad = path_length_to_base_gradient(ctx, tet, p["MAX_OVERHANG"], p["INITIAL_ROTATION_FIELD_SMOOTHING"],
+                                        p["SET_INITIAL_ROTATION_TO_ZERO"])
     if p["STEEP_OVERHANG_COMPENSATION"]:
         ia = tet.cell_data["in_air"]
         irf[ia] += 2 * (np.deg2rad(180) - tet.cell_data['overhang_angle'][ia])
@@ -333,6 +343,12 @@ def initial_rotation_field(ctx, tet, p):
 
 
 def optimize_rotations(ctx, tet, p, verbose=0):
+    """Notebook optimize_rotations: the rotation (tilt) field, one angle in rad per cell.
+
+    Least squares over the per-cell angles x: residuals NEIGHBOUR_LOSS_WEIGHT * (x_a - x_b)^2 for every pair of
+    face neighbours (smoothness) and (x_c - initial_c)^2 for every cell with an initial rotation (the overhang
+    fix), squared as in the notebook. TRF with ROTATION_ITERATIONS evaluations, starting from 0.
+    """
     with TIMER("initial rotation field"):
         irf = initial_rotation_field(ctx, tet, p)
     valid = np.where(~np.isnan(irf))[0]
@@ -364,17 +380,19 @@ def optimize_rotations(ctx, tet, p, verbose=0):
 
 
 def rotation_matrices(tet, rotation_field):
-    from scipy.spatial.transform import Rotation as R
-    cxy = tet.cell_data["cell_center"][:, :2]
-    c3 = np.hstack([cxy, np.zeros((cxy.shape[0], 1))])
-    t = np.cross(np.array([0, 0, 1]), c3)
-    with np.errstate(invalid='ignore'):
-        t /= np.linalg.norm(t, axis=1)[:, None]
-    t[np.isnan(t).any(axis=1)] = [1, 0, 0]
-    return R.from_rotvec(rotation_field[:, None] * t).as_matrix()
+    """The notebook's calculate_rotation_matrices: rotation_field about each cell's tangential axis (same operations
+    as s4/geometry.py, bit for bit)."""
+    return geometry.rotation_matrices(tet.cell_data["cell_center"], rotation_field)
 
 
 def calculate_deformation(tet, rotation_field, iterations, verbose=0):
+    """Notebook calculate_deformation (DEFORMATION_METHOD 'notebook'): new vertex positions for the rotation field.
+
+    Least squares over all vertex coordinates: per cell, |N V_c - R_c N V0_c|^2, i.e. the cell's centred vertices
+    should be its original centred vertices rotated by R_c (squared again, as in the notebook). TRF with
+    `iterations` evaluations from the undeformed mesh; it does not converge, and folds tets (see island_free).
+    Returns (n_points, 3).
+    """
     cells = tet.field_data["cells"]
     n_cells = tet.number_of_cells
     n_pts = tet.number_of_points
@@ -438,8 +456,8 @@ def deformation_step(tet, rf, p, last=True, verbose=0, log=print):
         return calculate_deformation(tet, rf, p["DEFORMATION_ITERATIONS"], verbose)
     if method == "island_free":
         from . import island_free
-        nv, LAST_DEFORM_INFO = island_free.deform(tet.points, tet.field_data["cells"], np.asarray(tet.cell_data["cell_center"]),
-                                   rf, p, lift=last, log=log)
+        nv, LAST_DEFORM_INFO = island_free.deform(tet.points, tet.field_data["cells"],
+                                                  np.asarray(tet.cell_data["cell_center"]), rf, p, lift=last, log=log)
         return nv
     raise ValueError(f"unknown DEFORMATION_METHOD {method!r} (use 'island_free' or 'notebook')")
 

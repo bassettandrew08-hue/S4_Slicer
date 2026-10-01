@@ -16,8 +16,12 @@ import re
 
 import numpy as np
 
+from .geometry import rotation_matrices, tangential_vectors  # noqa: F401 (re-exported: older imports)
 from .timing import TIMER
 
+# The notebook-exact baseline: every output fix off, the notebook's 1 mm retraction. map_gcode fills in from here
+# whatever its caller leaves out. The user-facing defaults (fixes on, with what each flag does) are
+# s4/profile.py MAP_DEFAULTS; the pipeline always passes a full map section from there.
 MAPPING_DEFAULTS = dict(
     SEG_SIZE=0.6,
     MAX_ROTATION=30,
@@ -27,36 +31,13 @@ MAPPING_DEFAULTS = dict(
     RETRACTION_LENGTH=1.0,
     ROTATION_MAX_DELTA=float(np.deg2rad(1)),
     MAX_EXTRUSION_MULTIPLIER=10,
-    # False = notebook-exact. True = retract/unretract in place (E-only line at Cura's feed) instead of
-    # extruding +/-RETRACTION_LENGTH during the 1 mm travel lift/plunge (which leaves filament "sticks").
     SPLIT_RETRACTIONS=False,
-    # False = notebook-exact: extrusion is scaled by each tet's volume ratio (constant per tet, so it jumps at
-    # tet boundaries). True = volume-weighted per-vertex ratio, interpolated barycentrically like position.
     SMOOTH_EXTRUSION_MULTIPLIER=False,
-    EXTRUSION_MULTIPLIER_RANGE=None,  # e.g. (0.5, 2.0): clamp the volume-ratio multiplier
-    # False = notebook-exact. True = (a) after a travel that left the part (lifted to the highest printed point),
-    # lower to the re-entry point's true height before the next move instead of printing downward from the lifted
-    # point (that drew vertical "poles"); (b) rotation-interpolation steps carry the command of the move they belong
-    # to (the notebook used the previous move's, giving extruding G00 lines and non-extruding G01 lines).
+    EXTRUSION_MULTIPLIER_RANGE=None,
     SAFE_TRAVEL_TRANSITIONS=False,
 )
 
 _WORD = re.compile(r"([A-Za-z])\s*(-?(?:\d+\.?\d*|\.\d+))")
-
-
-def tangential_vectors(cell_centers):
-    cxy = cell_centers[:, :2]
-    c3 = np.hstack([cxy, np.zeros((cxy.shape[0], 1))])
-    t = np.cross(np.array([0, 0, 1]), c3)
-    with np.errstate(invalid="ignore"):
-        t /= np.linalg.norm(t, axis=1)[:, None]
-    t[np.isnan(t).any(axis=1)] = [1, 0, 0]
-    return t
-
-
-def rotation_matrices(cell_centers, rotation_field):
-    from scipy.spatial.transform import Rotation as R
-    return R.from_rotvec(rotation_field[:, None] * tangential_vectors(cell_centers)).as_matrix()
 
 
 def _abs_det3(rows):
@@ -148,7 +129,8 @@ def read_gcode_points(path, SEG_SIZE):
     return {"position": P, "command": commands, "extrusion": extrusions, "inv_time_feed": inv_feeds, "feed": feeds}
 
 
-def cell_rotations_and_squish(input_cells, input_points, input_centers, def_points, def_centers, MAX_ROTATION, MIN_ROTATION):
+def cell_rotations_and_squish(input_cells, input_points, input_centers, def_points, def_centers, MAX_ROTATION,
+                              MIN_ROTATION):
     """Vectorised per-cell 2D Kabsch rotation, per-vertex averaged rotation, and z-squish scale."""
     n_cells = input_cells.shape[0]
     new_v = def_points[input_cells] - def_centers[:, None, :]
@@ -249,6 +231,20 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
 
 
 def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
+    """Walk the segmented planar moves in order and emit the 4-axis moves (notebook cell 17's loop).
+
+    Inputs per planar point: new_pos_all = position mapped back to the part, rot_all = B tilt (rad), bary_ok =
+    whether it lies in a tet, squish_all = extrusion multiplier; g = the planar moves (commands, E, feeds).
+    Per point: points outside the part drop print moves and turn travels into a lift to the highest printed
+    point; B is smoothed (ROTATION_AVERAGING_ALPHA) and steps over ROTATION_MAX_DELTA are split; E is scaled.
+    The o_* lists are the output moves, one entry each: position, rotation, command, extrusion, inverse-time feed,
+    travelling (z-hop) flag, planar feed, e_only (zero-motion retract/unretract line).
+
+    Flags (all False = notebook-exact; S4_PIPELINE.md 'Differences from the notebook'): SPLIT (SPLIT_RETRACTIONS)
+    retracts/unretracts in place as e_only moves; SAFE (SAFE_TRAVEL_TRANSITIONS) lowers to the true re-entry
+    height after a travel that left the part, keeps each split step's own command and clamps z < 0 to the bed;
+    MRANGE (EXTRUSION_MULTIPLIER_RANGE) clamps the multiplier. Returns the o_* lists as a dict, plus '_lost'.
+    """
     ALPHA = mp["ROTATION_AVERAGING_ALPHA"]
     RET = mp["RETRACTION_LENGTH"]
     MAXD = mp["ROTATION_MAX_DELTA"]
@@ -377,7 +373,8 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
         prev_travelling = travelling
         prev_command = move_command if SAFE else command
 
-        if command == "G01" and extrusion is not None and extrusion > 0 and (highest_printed_point != 0 or new_position[2] < 1):
+        if (command == "G01" and extrusion is not None and extrusion > 0
+                and (highest_printed_point != 0 or new_position[2] < 1)):
             highest_printed_point = max(highest_printed_point, new_position[2])
 
     return {"position": o_pos, "rotation": o_rot, "command": o_cmd, "extrusion": o_ext,

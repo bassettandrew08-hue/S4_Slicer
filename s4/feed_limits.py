@@ -17,6 +17,8 @@ import re
 
 import numpy as np
 
+from .geometry import nozzle_tip
+
 _WORD = re.compile(r"([A-Z])(-?\d+(?:\.\d*)?|-?\.\d+)")
 
 
@@ -54,7 +56,8 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
                 if "F" in w and any(new[k] != pos[k] for k in pos):
                     t = _move_time(pos, new, None, float(w["F"]), lim, nozzle_offset)
                     out.append(re.sub(r" F-?[\d.eE+-]+", " F" + _fmt_f(1.0 / t), lines[i + 1].rstrip()))
-                    pos = new; moves += 1
+                    pos = new
+                    moves += 1
                     mode = 93  # the triple's closing G93 is consumed here
                     i += 3
                     continue
@@ -64,7 +67,8 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
             if not started:  # "G0 C0 X0 Z20 B0 ; go to start"
                 started = True
                 pos = new
-                out.append(line); i += 1
+                out.append(line)
+                i += 1
                 continue
             if mode == 93 and "F" in w and any(new[k] != pos[k] for k in pos):
                 t0 = 1.0 / float(w["F"])
@@ -82,9 +86,7 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
 
 
 def _tip(p, L):
-    b = np.radians(p["B"]); th = np.radians(p["C"])
-    r = p["X"] + np.sin(b) * L; z = p["Z"] - (np.cos(b) - 1) * L
-    return np.array([r * np.cos(th), r * np.sin(th), z])
+    return np.array(nozzle_tip(p["C"], p["X"], p["Z"], p["B"], L))
 
 
 def _move_time(a, b, t0, feed, lim, L):

@@ -11,7 +11,8 @@ these mechanical changes:
   * the user's fixes are kept: MAX_POS/NEG_ROTATION = +/-360 deg, 3D zero-padded
     vectors for np.cross, no Linux-only calls
 
-Do NOT optimize this file. Put faster code in s4/fast.py.
+Do NOT optimize this file. Put faster code in s4/fast_deform.py / s4/fast_map.py. The long lines and the notebook's
+own style are copied verbatim from the notebook on purpose, so the two can be diffed: don't reformat them.
 """
 import base64
 import pickle

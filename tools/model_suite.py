@@ -25,10 +25,16 @@ MODELS = ["pi 3mm", "benchy upsidedown tilted", "Squirtle", "dino", "z mount 3mm
 # regions where roughness matters most, in the part's real frame (x, y, z boxes)
 REGIONS = {"pi 3mm": {"bridge_underside": ((-5, 5), (-5.5, 5.5), (9.5, 12.5))}}
 
+# the per-model metrics, in table-column order. Most are read from the run's "; s4:" header lines; tilt_deg,
+# along_axis and zigzag are computed in measure()
+METRICS = ("ungrounded_mm", "ungrounded_wall_mm", "island_wall_mm", "cantilever_wall_mm", "island_mm",
+           "cantilever_mm", "bridge_mm", "poles", "along_axis", "tilt_deg", "zigzag", "estimated_print_time_min")
+
 # metric: (worse when, tolerance before it counts as a regression)
 # structure is judged on walls/skin; sparse infill floats a little even in a flat print (it is still reported)
-CHECKS = {"ungrounded_mm": ("up_rel", 0.5), "ungrounded_wall_mm": ("up", 1.0), "island_wall_mm": ("up", 0.5), "cantilever_wall_mm": ("up", 2.0),
-          "poles": ("up", 0), "along_axis": ("up", 0), "zigzag": ("up_rel", 0.10), "tilt_deg": ("down", 2.0)}
+CHECKS = {"ungrounded_mm": ("up_rel", 0.5), "ungrounded_wall_mm": ("up", 1.0), "island_wall_mm": ("up", 0.5),
+          "cantilever_wall_mm": ("up", 2.0), "poles": ("up", 0), "along_axis": ("up", 0), "zigzag": ("up_rel", 0.10),
+          "tilt_deg": ("down", 2.0)}
 
 
 def run_model(model, out, extra, python):
@@ -59,14 +65,15 @@ def measure(model, gc, log=None, seconds=None):
     num = lambda k, d=None: float(hdr[k]) if k in hdr and re.match(r"^-?[\d.]+(e-?\d+)?$", hdr[k]) else d
     r = quality.path_roughness(gc, num("NOZZLE_OFFSET", 42.0))
     m = re.search(r"extruding along the nozzle axis[^:]*: (\d+)", log or "")
-    res = {k: num(k) for k in ("ungrounded_mm", "ungrounded_wall_mm", "island_wall_mm", "cantilever_wall_mm", "island_mm", "cantilever_mm", "bridge_mm", "poles",
-                               "estimated_print_time_min")}
-    res.update(tilt_deg=num("deform.tilt_deg"), target_tilt_deg=num("deform.target_tilt_deg"),
-               along_axis=int(m.group(1)) if m else (0 if log is not None else None), zigzag=r["count"],
-               segments=r["segments"],
+    computed = {"tilt_deg": num("deform.tilt_deg"),
+                "along_axis": int(m.group(1)) if m else (0 if log is not None else None),
+                "zigzag": r["count"]}
+    res = {k: computed[k] if k in computed else num(k) for k in METRICS}
+    res.update(target_tilt_deg=num("deform.target_tilt_deg"), segments=r["segments"],
                seconds=round(seconds, 1) if seconds else None)
     for name, box in REGIONS.get(model, {}).items():
-        mid = r["mid"]; inside = (r["rough"] > 30)
+        mid = r["mid"]
+        inside = (r["rough"] > 30)
         for ax, (lo, hi) in enumerate(box):
             inside &= (mid[:, ax] >= lo) & (mid[:, ax] <= hi)
         res[f"zigzag_{name}"] = int(inside.sum())
@@ -116,15 +123,16 @@ def main():
     json.dump({"settings": a.set, "cura_settings": a.cura_set, "results": results},
               open(os.path.join(a.out, "summary.json"), "w"), indent=1)
     base = json.load(open(os.path.join(a.baseline, "summary.json")))["results"] if a.baseline else {}
-    cols = ["ungrounded_mm", "ungrounded_wall_mm", "island_wall_mm", "cantilever_wall_mm", "island_mm", "cantilever_mm", "bridge_mm", "poles", "along_axis", "tilt_deg", "zigzag",
-            "estimated_print_time_min"]
-    print(f"{'model':26s}" + "".join(f"{c.replace('_mm', '').replace('estimated_print_time_min', 'minutes'):>12s}" for c in cols)
-          + "  region zigzag")
+    cols = METRICS
+    heads = (c.replace("_mm", "").replace("estimated_print_time_min", "minutes") for c in cols)
+    print(f"{'model':26s}" + "".join(f"{h:>12s}" for h in heads) + "  region zigzag")
     regressions = 0
     for mdl in a.models:
         r = results[mdl]
         if "error" in r:
-            print(f"{mdl:26s} ERROR {r['error']}"); regressions += 1; continue
+            print(f"{mdl:26s} ERROR {r['error']}")
+            regressions += 1
+            continue
         reg = " ".join(f"{k[7:]}={v}" for k, v in r.items() if k.startswith("zigzag_"))
         print(f"{mdl:26s}" + "".join(f"{('-' if r.get(c) is None else f'{r[c]:g}'):>12s}" for c in cols) + f"  {reg}")
         if mdl in base and "error" not in base[mdl]:

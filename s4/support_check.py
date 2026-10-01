@@ -1,5 +1,6 @@
 """
 Print-order support check: find extrusion that would be laid down in mid-air.
+(The poles / along-the-nozzle-axis check of the final 4-axis G-code is in s4/quality.py.)
 
 Works on the real-space toolpath (planar G-code mapped back through the deformation, exactly as the
 mapper does it), in print order, one planar layer at a time. A point is "floating" if nothing printed in
@@ -82,7 +83,8 @@ def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), ra
 
 
 def check_planar(planar_path, radius=1.0, seg_size=0.6, retraction_length=1.0):
-    """Same check on Cura's planar toolpath in the deformed shape (no mapping). Islands are born here."""
+    """Debugging helper, not called by the pipeline: the same check on Cura's planar toolpath in the deformed shape
+    (no mapping back), to see whether an island is born in the deformation or in the mapping."""
     g = fast_map.read_gcode_points(planar_path, seg_size)
     layer, types = _planar_layers(planar_path, seg_size)
     ext = np.array([e is not None and e > 0 and abs(e) != retraction_length for e in g["extrusion"]])
@@ -122,7 +124,8 @@ def analyse(real, ext, layer, types, radius):
     def supported(i):
         return 0 <= i < len(P) and ext[i] and not floating[i]
     runs = np.split(fl, np.nonzero(np.diff(fl) > 1)[0] + 1) if len(fl) else []
-    classes = {"bridge": [0, 0.0, Counter(), 0.0], "cantilever": [0, 0.0, Counter(), 0.0], "island": [0, 0.0, Counter(), 0.0]}
+    # per class: [run count, length mm, ;TYPE: counts, walls/skin length mm]
+    classes = {k: [0, 0.0, Counter(), 0.0] for k in ("bridge", "cantilever", "island")}
     for r in runs:
         a, b = supported(r[0] - 1), supported(r[-1] + 1)
         k = "bridge" if a and b else ("cantilever" if a or b else "island")
@@ -166,11 +169,15 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     ei = np.nonzero(ext & (layer >= 0))[0]
     if len(ei) == 0:
         return 0.0, [], {"real_mm": 0.0, "wall_mm": 0.0}
-    Q = P[ei]; Ly = layer[ei]; n = len(ei)
+    Q = P[ei]
+    Ly = layer[ei]
+    n = len(ei)
     pairs = cKDTree(Q).query_pairs(R, output_type="ndarray")
     a, b = pairs[:, 0], pairs[:, 1]
-    fwd = Ly[a] > Ly[b]; bwd = Ly[b] > Ly[a]
-    A = csr_matrix((np.ones(int(fwd.sum() + bwd.sum()), np.int8), (np.r_[a[fwd], b[bwd]], np.r_[b[fwd], a[bwd]])), shape=(n, n))
+    fwd = Ly[a] > Ly[b]
+    bwd = Ly[b] > Ly[a]
+    A = csr_matrix((np.ones(int(fwd.sum() + bwd.sum()), np.int8), (np.r_[a[fwd], b[bwd]], np.r_[b[fwd], a[bwd]])),
+                   shape=(n, n))
     run_id = np.cumsum(np.r_[1, (np.diff(ei) != 1) | (np.diff(Ly) != 0)])
     seg = np.r_[0, np.linalg.norm(np.diff(Q, axis=0), axis=1)] * (np.r_[0, np.diff(run_id)] == 0)
     s_along = np.cumsum(seg)
@@ -183,7 +190,8 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
             continue
         direct = (Q[idx, 2] < R) | (np.asarray(A[idx] @ g.astype(np.int8)).ravel() > 0)
         gl = direct.copy()
-        rid = run_id[idx]; sa = s_along[idx]
+        rid = run_id[idx]
+        sa = s_along[idx]
         for r in np.unique(rid[direct]):
             m = rid == r
             dist = np.min(np.abs(sa[m][:, None] - sa[m & direct][None, :]), axis=1)
@@ -194,10 +202,11 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     # apart, so the old "count x seg_mm" understated the length)
     # at least seg_mm per point, so plastic piled into one spot (a blob: points with no path length) still counts
     point_len = 0.5 * (seg + np.r_[seg[1:], 0.0])
-    point_len[point_len < 0.02] = seg_mm  # plastic piled into one spot (a blob) still counts; real points are further apart
+    point_len[point_len < 0.02] = seg_mm  # real points are further apart than 0.02 mm
     typ = np.array([types[i] for i in ei], dtype=object)
     structural = np.isin(typ, STRUCTURAL)  # walls, skin: sparse infill floats a little even in flat prints
-    real_mm = float(point_len[ug].sum()); wall_mm = float(point_len[ug & structural].sum())
+    real_mm = float(point_len[ug].sum())
+    wall_mm = float(point_len[ug & structural].sum())
     keep = ug[a] & ug[b]
     C = csr_matrix((np.ones(int(keep.sum())), (a[keep], b[keep])), shape=(n, n))
     _, lab = connected_components(C, directed=False)
@@ -241,53 +250,3 @@ def _format_local(r):
         s += f"\n[support]   {r['outside_part_points']} points map >0.5 mm outside the model"
     return s
 
-
-def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0, retraction=1.0):
-    """Suspicious extruding moves (longer than min_dz) in the final 4-axis G-code. Returns (poles, along_axis):
-    poles start right after a travel and drop straight down more than pole_dz (extrusion dragged down from a lifted
-    travel point: these print as free-standing sticks); along_axis ones run mostly along the nozzle's own axis
-    (pushing into or pulling out of the bead). A vertical move with the nozzle tilted sideways is normal S4 printing
-    and isn't flagged."""
-    word = re.compile(r"([CXZBE])(-?\d+(?:\.\d*)?|-?\.\d+)")
-    rows = []
-    with open(gcode_path) as fh:
-        for n, line in enumerate(fh, 1):
-            if not line.startswith(("G0", "G1")):
-                continue
-            w = dict(word.findall(line))
-            if "X" in w:
-                rows.append((n, float(w["C"]), float(w["X"]), float(w["Z"]), float(w["B"]), float(w.get("E", "nan"))))
-    if len(rows) < 2:
-        return [], []
-    a = np.array(rows)
-    b = np.radians(a[:, 4]); th = np.radians(a[:, 1])
-    r = a[:, 2] + np.sin(b) * nozzle_offset
-    z = a[:, 3] - (np.cos(b) - 1) * nozzle_offset
-    P = np.c_[r * np.cos(th), r * np.sin(th), z]
-    d = np.diff(P, axis=0)
-    dz = np.abs(d[:, 2]); dxy = np.hypot(d[:, 0], d[:, 1])
-    E = a[:, 5]
-    printing = (np.nan_to_num(E) > 0) & ~np.isclose(E, retraction)  # an unretract is not printing
-    n = np.linalg.norm(d, axis=1)
-    bb, tt = b[1:], th[1:]  # nozzle axis at the segment end: radial -sin B, vertical cos B
-    axis = np.c_[-np.sin(bb) * np.cos(tt), -np.sin(bb) * np.sin(tt), np.cos(bb)]
-    along = np.abs(np.sum(d * axis, axis=1)) > 0.894 * n  # within ~27 deg of the nozzle axis
-    vertical = (dz > min_dz) & (dxy < 0.5 * dz)
-    poles, steep = [], []
-    for k in np.nonzero(printing[1:] & (n > min_dz) & (vertical | along))[0]:
-        item = (int(a[k + 1, 0]), float(P[k, 2]), float(P[k + 1, 2]), [round(float(v), 1) for v in P[k + 1, :2]])
-        if vertical[k] and not printing[k] and dz[k] > pole_dz:
-            poles.append(item)
-        elif along[k]:
-            steep.append(item)
-    return poles, steep
-
-
-def format_vertical(result, line_offset=0):
-    poles, steep = result
-    s = f"[quality] poles (extruding >2 mm straight down from a travel): {len(poles) or 'none'}"
-    for line, z0, z1, xy in poles[:3]:
-        s += f"\n[quality]   G-code line {line + line_offset}: z {z0:.1f} -> {z1:.1f} at {xy}"
-    if steep:
-        s += f"\n[quality] extruding along the nozzle axis (>1 mm; pushing into or pulling out of the bead): {len(steep)}"
-    return s

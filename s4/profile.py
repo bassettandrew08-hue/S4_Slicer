@@ -37,10 +37,20 @@ MAP_DEFAULTS = dict(
     ROTATION_MAX_DELTA=math.radians(1),  # rad; B steps bigger than this get interpolated
     MAX_EXTRUSION_MULTIPLIER=10,
     RETRACTION_LENGTH=None,         # mm; None = take Cura's resolved retraction_amount
-    SPLIT_RETRACTIONS=True,         # retract/unretract in place instead of during the travel lift/plunge
+    # The output fixes below are off in --notebook-exact (and in s4/fast_map.py MAPPING_DEFAULTS).
+    # True: retract/unretract in place (an E-only line at Cura's feed) instead of extruding +/-RETRACTION_LENGTH
+    # during the 1 mm travel lift/plunge (which leaves filament "sticks")
+    SPLIT_RETRACTIONS=True,
+    # True: extrusion is scaled by a volume-weighted per-vertex volume ratio, interpolated barycentrically like the
+    # position. False (notebook): by each tet's own volume ratio, constant per tet, so the flow jumps at tet boundaries
     SMOOTH_EXTRUSION_MULTIPLIER=True,
-    EXTRUSION_MULTIPLIER_RANGE=[0.5, 2.0],  # or null for no clamp
-    SAFE_TRAVEL_TRANSITIONS=True,   # lower before printing after a travel that left the part; no extruding G00
+    EXTRUSION_MULTIPLIER_RANGE=[0.5, 2.0],  # clamp the volume-ratio multiplier to this range, or null for no clamp
+    # True: (a) after a travel that left the part (lifted to the highest printed point), lower to the re-entry
+    # point's true height before the next move instead of printing downward from the lifted point (that drew
+    # vertical "poles"); (b) rotation-interpolation steps carry the command of the move they belong to (the notebook
+    # used the previous move's, giving extruding G00 lines and non-extruding G01 lines); (c) points mapped just below
+    # the bed are clamped to it instead of dropped
+    SAFE_TRAVEL_TRANSITIONS=True,
     # slow down any move that would drive an axis past these speeds (the notebook timed moves by the planar G-code
     # only, asking for thousands of deg/s on C and B). Placeholders: set your machine's real limits
     LIMIT_AXIS_SPEEDS=True,
@@ -66,8 +76,8 @@ CURA_DEFAULTS = dict(
     strip_start_prime=True,         # drop Cura's start-code prime (it would land inside the part)
 )
 NOTEBOOK_EXACT = {"deform": {"DEFORMATION_METHOD": "notebook"},
-                  "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False, "SAFE_TRAVEL_TRANSITIONS": False,
-                          "LIMIT_AXIS_SPEEDS": False,
+                  "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False,
+                          "SAFE_TRAVEL_TRANSITIONS": False, "LIMIT_AXIS_SPEEDS": False,
                           "EXTRUSION_MULTIPLIER_RANGE": None},
                   "cura": {"strip_start_prime": False}}
 DEG_KEYS = {"MAX_POS_ROTATION", "MAX_NEG_ROTATION", "ROTATION_MAX_DELTA"}
@@ -129,7 +139,8 @@ def merge(profile, overlay, where="profile"):
             clean = []
             for i, it in enumerate(its):
                 it = _normalise_deg({k: v for k, v in it.items() if not k.startswith("_")})
-                _check_keys("deform", it, [k for k in DEFAULT_PARAMS if k != "PART_OFFSET"], f"{where} iteration {i + 1}")
+                _check_keys("deform", it, [k for k in DEFAULT_PARAMS if k != "PART_OFFSET"],
+                            f"{where} iteration {i + 1}")
                 clean.append(it)
             p["deform"]["iterations"] = clean
     if "map" in overlay:
@@ -171,8 +182,8 @@ def apply_set(profile, assignment):
         elif bare in CURA_DEFAULTS:
             section = "cura"
         else:
-            raise ProfileError(f"--set: unknown setting {bare!r}{_suggest(bare, list(DEFAULT_PARAMS) + list(MAP_DEFAULTS))}"
-                               " (Cura settings go in --cura-set)")
+            hint = _suggest(bare, list(DEFAULT_PARAMS) + list(MAP_DEFAULTS))
+            raise ProfileError(f"--set: unknown setting {bare!r}{hint} (Cura settings go in --cura-set)")
     return merge(profile, {section: {bare: value}}, where="--set")
 
 
@@ -228,4 +239,5 @@ def to_json(p):
                     it[k + "_DEG"] = round(math.degrees(it.pop(k)), 6)
     text = json.dumps(out, indent=2)
     # keep short lists of numbers on one line ("PART_OFFSET": [0, 10, 0])
-    return re.sub(r"\[\s*([-\d.eE+,\s]+?)\s*\]", lambda m: "[" + ", ".join(x.strip() for x in m.group(1).split(",")) + "]", text)
+    return re.sub(r"\[\s*([-\d.eE+,\s]+?)\s*\]",
+                  lambda m: "[" + ", ".join(x.strip() for x in m.group(1).split(",")) + "]", text)

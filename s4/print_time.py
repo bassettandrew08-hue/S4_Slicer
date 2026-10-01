@@ -45,8 +45,12 @@ def parse(lines, m):
     home = (float(m["HOME_X"]), float(m["HOME_Z"]), float(m["HOME_B"]))
 
     def push(t, f, dw, s, iv):
-        typ.append(t); feed.append(f); dwell.append(dw); inv.append(iv)
-        st[:] = s; pts.append(s[:])
+        typ.append(t)
+        feed.append(f)
+        dwell.append(dw)
+        inv.append(iv)
+        st[:] = s
+        pts.append(s[:])
 
     for raw in lines:
         s = raw
@@ -128,8 +132,22 @@ def parse(lines, m):
 
 @_njit
 def _plan(typ, feed, dwell, inv, c, vmax, amax, vE, aE, jerk, home_speed):
+    """The sim's plan(): total seconds for the parsed moves (typ, feed, dwell, inv; c = positions X Z B C E, one row
+    more than moves). The names mirror the sim's JavaScript on purpose, so the two can be compared line by line.
+
+    Per move i: L = move length (X/Z mm, else B/C deg, else E mm), vc = cruise speed (the feed, lowered so no axis
+    exceeds vmax / vE), acc = limiting acceleration along the move, kind 1/2/3 = X/Z, B/C only, E only, U = unit
+    direction in speed-normalised axis space. J = junction speeds (J[i] at the start of move i): from the corner
+    speed floor (jerk) and the direction change, only between moves of the same kind; then a backward and a
+    forward pass limit them by what acc can reach over L. Each move is a trapezoid (or triangle) from J[i] to
+    J[i + 1]; dwells (typ 4) add their time.
+    """
     n = len(typ)
-    L = np.zeros(n); vc = np.zeros(n); acc = np.zeros(n); kind = np.zeros(n, np.int8); U = np.zeros((n, 4))
+    L = np.zeros(n)
+    vc = np.zeros(n)
+    acc = np.zeros(n)
+    kind = np.zeros(n, np.int8)
+    U = np.zeros((n, 4))
     d = np.zeros(4)
     for i in range(n):
         t = typ[i]
@@ -138,13 +156,17 @@ def _plan(typ, feed, dwell, inv, c, vmax, amax, vE, aE, jerk, home_speed):
         for k in range(4):
             d[k] = c[i + 1, k] - c[i, k]
         dE = c[i + 1, 4] - c[i, 4]
-        lin = math.hypot(d[0], d[1]); rot = math.hypot(d[2], d[3])
+        lin = math.hypot(d[0], d[1])
+        rot = math.hypot(d[2], d[3])
         if lin > 1e-9:
-            ln = lin; kd = 1
+            ln = lin
+            kd = 1
         elif rot > 1e-9:
-            ln = rot; kd = 2
+            ln = rot
+            kd = 2
         elif abs(dE) > 1e-9:
-            ln = abs(dE); kd = 3
+            ln = abs(dE)
+            kd = 3
         else:
             continue
         if t == 2:
@@ -153,17 +175,24 @@ def _plan(typ, feed, dwell, inv, c, vmax, amax, vE, aE, jerk, home_speed):
             v = max(ln * feed[i] / 60.0, 1e-4)  # G93: finish the move in 1/F minutes
         else:
             v = max(feed[i] / 60.0, 0.01)
-        T = ln / v; a = np.inf
+        T = ln / v
+        a = np.inf
         for k in range(4):
             ad = abs(d[k])
             if ad > 1e-12:
-                T = max(T, ad / vmax[k]); a = min(a, amax[k] * ln / ad)
+                T = max(T, ad / vmax[k])
+                a = min(a, amax[k] * ln / ad)
         if abs(dE) > 1e-12:
-            T = max(T, abs(dE) / vE); a = min(a, aE * ln / abs(dE))
-        L[i] = ln; vc[i] = ln / T; acc[i] = a; kind[i] = kd
+            T = max(T, abs(dE) / vE)
+            a = min(a, aE * ln / abs(dE))
+        L[i] = ln
+        vc[i] = ln / T
+        acc[i] = a
+        kind[i] = kd
         nrm = 0.0
         for k in range(4):
-            U[i, k] = d[k] / vmax[k]; nrm += U[i, k] ** 2
+            U[i, k] = d[k] / vmax[k]
+            nrm += U[i, k] ** 2
         nrm = math.sqrt(nrm)
         if nrm == 0.0:
             nrm = 1.0
@@ -190,12 +219,18 @@ def _plan(typ, feed, dwell, inv, c, vmax, amax, vE, aE, jerk, home_speed):
             continue
         if L[i] <= 0:
             continue
-        a = acc[i]; v0 = J[i]; v1 = J[i + 1]; ln = L[i]; vp = vc[i]
+        a = acc[i]
+        v0 = J[i]
+        v1 = J[i + 1]
+        ln = L[i]
+        vp = vc[i]
         fin = np.isfinite(a)
-        dA = (vp * vp - v0 * v0) / (2 * a); dD = (vp * vp - v1 * v1) / (2 * a)
+        dA = (vp * vp - v0 * v0) / (2 * a)
+        dD = (vp * vp - v1 * v1) / (2 * a)
         if dA + dD > ln:
             vp = math.sqrt((2 * a * ln + v0 * v0 + v1 * v1) / 2)
-            dA = (vp * vp - v0 * v0) / (2 * a); dD = (vp * vp - v1 * v1) / (2 * a)
+            dA = (vp * vp - v0 * v0) / (2 * a)
+            dD = (vp * vp - v1 * v1) / (2 * a)
         tA = (vp - v0) / a if fin else 0.0
         tD = (vp - v1) / a if fin else 0.0
         tC = max(0.0, (ln - dA - dD) / vp)
