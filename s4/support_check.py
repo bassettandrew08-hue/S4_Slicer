@@ -15,6 +15,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 
 from . import fast_map, meshio_s4
+from .geometry import nozzle_tip
 
 _WORD = re.compile(r"([A-Za-z])\s*(-?(?:\d+\.?\d*|\.\d+))")
 
@@ -261,9 +262,8 @@ def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0, 
         return [], []
     a = np.array(rows)
     b = np.radians(a[:, 4]); th = np.radians(a[:, 1])
-    r = a[:, 2] + np.sin(b) * nozzle_offset
-    z = a[:, 3] - (np.cos(b) - 1) * nozzle_offset
-    P = np.c_[r * np.cos(th), r * np.sin(th), z]
+    x, y, z = nozzle_tip(a[:, 1], a[:, 2], a[:, 3], a[:, 4], nozzle_offset)
+    P = np.c_[x, y, z]
     d = np.diff(P, axis=0)
     dz = np.abs(d[:, 2]); dxy = np.hypot(d[:, 0], d[:, 1])
     E = a[:, 5]

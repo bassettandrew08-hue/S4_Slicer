@@ -32,7 +32,7 @@ from scipy.optimize import least_squares
 from scipy.sparse import csr_matrix
 
 from .timing import TIMER
-from . import meshio_s4
+from . import geometry, meshio_s4
 from .fast_lsq import FastJacobian, fast_trf
 
 up_vector = np.array([0, 0, 1])
@@ -364,14 +364,9 @@ def optimize_rotations(ctx, tet, p, verbose=0):
 
 
 def rotation_matrices(tet, rotation_field):
-    from scipy.spatial.transform import Rotation as R
-    cxy = tet.cell_data["cell_center"][:, :2]
-    c3 = np.hstack([cxy, np.zeros((cxy.shape[0], 1))])
-    t = np.cross(np.array([0, 0, 1]), c3)
-    with np.errstate(invalid='ignore'):
-        t /= np.linalg.norm(t, axis=1)[:, None]
-    t[np.isnan(t).any(axis=1)] = [1, 0, 0]
-    return R.from_rotvec(rotation_field[:, None] * t).as_matrix()
+    """The notebook's calculate_rotation_matrices: rotation_field about each cell's tangential axis (same operations
+    as s4/geometry.py, bit for bit)."""
+    return geometry.rotation_matrices(tet.cell_data["cell_center"], rotation_field)
 
 
 def calculate_deformation(tet, rotation_field, iterations, verbose=0):

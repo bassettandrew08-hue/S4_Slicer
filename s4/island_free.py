@@ -32,7 +32,7 @@ from scipy.sparse import coo_matrix, diags, identity
 from scipy.sparse.linalg import splu
 from scipy.spatial.transform import Rotation
 
-from .fast_map import rotation_matrices, tangential_vectors
+from .geometry import rotation_matrices, tangential_vectors
 from .params import DEFAULT_PARAMS
 
 # the deform settings this module reads; defaults, order and their explanations are in s4/params.py

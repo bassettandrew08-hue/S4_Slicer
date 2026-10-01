@@ -16,6 +16,7 @@ import re
 
 import numpy as np
 
+from .geometry import rotation_matrices, tangential_vectors  # noqa: F401 (re-exported: older imports)
 from .timing import TIMER
 
 # The notebook-exact baseline: every output fix off, the notebook's 1 mm retraction. map_gcode fills in from here
@@ -37,21 +38,6 @@ MAPPING_DEFAULTS = dict(
 )
 
 _WORD = re.compile(r"([A-Za-z])\s*(-?(?:\d+\.?\d*|\.\d+))")
-
-
-def tangential_vectors(cell_centers):
-    cxy = cell_centers[:, :2]
-    c3 = np.hstack([cxy, np.zeros((cxy.shape[0], 1))])
-    t = np.cross(np.array([0, 0, 1]), c3)
-    with np.errstate(invalid="ignore"):
-        t /= np.linalg.norm(t, axis=1)[:, None]
-    t[np.isnan(t).any(axis=1)] = [1, 0, 0]
-    return t
-
-
-def rotation_matrices(cell_centers, rotation_field):
-    from scipy.spatial.transform import Rotation as R
-    return R.from_rotvec(rotation_field[:, None] * tangential_vectors(cell_centers)).as_matrix()
 
 
 def _abs_det3(rows):

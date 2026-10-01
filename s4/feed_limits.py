@@ -17,6 +17,8 @@ import re
 
 import numpy as np
 
+from .geometry import nozzle_tip
+
 _WORD = re.compile(r"([A-Z])(-?\d+(?:\.\d*)?|-?\.\d+)")
 
 
@@ -82,9 +84,7 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
 
 
 def _tip(p, L):
-    b = np.radians(p["B"]); th = np.radians(p["C"])
-    r = p["X"] + np.sin(b) * L; z = p["Z"] - (np.cos(b) - 1) * L
-    return np.array([r * np.cos(th), r * np.sin(th), z])
+    return np.array(nozzle_tip(p["C"], p["X"], p["Z"], p["B"], L))
 
 
 def _move_time(a, b, t0, feed, lim, L):

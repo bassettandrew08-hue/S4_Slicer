@@ -10,6 +10,8 @@ import re
 
 import numpy as np
 
+from .geometry import nozzle_tip
+
 _WORD = re.compile(r"([CXZBEF])(-?\d+(?:\.\d*)?|-?\.\d+)")
 
 
@@ -37,10 +39,8 @@ def bead_segments(gcode_path, nozzle_offset=42.0):
 
     def tip(f):
         s = a[mv, :4] + (a[mv, 4:] - a[mv, :4]) * f[:, None]
-        bb = np.radians(s[:, 3]); th = np.radians(s[:, 0])
-        r = s[:, 1] + np.sin(bb) * nozzle_offset
-        h = s[:, 2] - (np.cos(bb) - 1) * nozzle_offset
-        return np.c_[r * np.cos(th), r * np.sin(th), h]
+        x, y, h = nozzle_tip(s[:, 0], s[:, 1], s[:, 2], s[:, 3], nozzle_offset)
+        return np.c_[x, y, h]
     return tip(f0), tip(f1)
 
 
