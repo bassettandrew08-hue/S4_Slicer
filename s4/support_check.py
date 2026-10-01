@@ -113,7 +113,7 @@ def analyse(real, ext, layer, types, radius):
         gap[ei[k]] = min(g, Q[k, 2])
 
     fl = np.nonzero(floating)[0]
-    ug_mm, regions = grounded_regions(real, ext, layer, types, radius)
+    ug_mm, regions, ug_len = grounded_regions(real, ext, layer, types, radius)
 
     # Group floating points into runs along the toolpath and classify them by what the ends connect to:
     #   bridge     - supported extrusion on both ends (normal FDM bridging; sparse gyroid does this even in flat prints)
@@ -133,6 +133,8 @@ def analyse(real, ext, layer, types, radius):
 
     return {
         "ungrounded_mm": ug_mm,
+        "ungrounded_real_mm": ug_len["real_mm"],  # true path length
+        "ungrounded_wall_mm": ug_len["wall_mm"],  # of it, walls and skin (not sparse infill)
         "regions": regions,
         "runs": {k: {"count": v[0], "length_mm": v[1], "types": v[2].most_common()} for k, v in classes.items()},
         "extruding_points": int(ext.sum()),
@@ -155,7 +157,7 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     into regions (connected within R). Returns (total ungrounded mm, regions sorted by size)."""
     ei = np.nonzero(ext & (layer >= 0))[0]
     if len(ei) == 0:
-        return 0.0, []
+        return 0.0, [], {"real_mm": 0.0, "wall_mm": 0.0}
     Q = P[ei]; Ly = layer[ei]; n = len(ei)
     pairs = cKDTree(Q).query_pairs(R, output_type="ndarray")
     a, b = pairs[:, 0], pairs[:, 1]
@@ -180,6 +182,14 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
             gl[np.nonzero(m)[0]] |= dist <= reach
         g[idx] = gl
     ug = ~g
+    # path length each point stands for: half of the segments on either side of it within its run (points are ~0.5 mm
+    # apart, so the old "count x seg_mm" understated the length)
+    point_len = 0.5 * (seg + np.r_[seg[1:], 0.0])
+    lone = point_len == 0  # a run of one point
+    point_len[lone] = seg_mm
+    typ = np.array([types[i] for i in ei], dtype=object)
+    structural = ~np.isin(typ, ["FILL"])  # walls, skin: sparse infill floats a little even in flat prints
+    real_mm = float(point_len[ug].sum()); wall_mm = float(point_len[ug & structural].sum())
     keep = ug[a] & ug[b]
     C = csr_matrix((np.ones(int(keep.sum())), (a[keep], b[keep])), shape=(n, n))
     _, lab = connected_components(C, directed=False)
@@ -191,12 +201,13 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
                         "centre": [round(float(v), 1) for v in Q[m].mean(0)],
                         "types": Counter(types[i] for i in ei[m]).most_common(2)})
     regions.sort(key=lambda r: -r["mm"])
-    return float(ug.sum() * seg_mm), regions
+    return float(ug.sum() * seg_mm), regions, {"real_mm": real_mm, "wall_mm": wall_mm}
 
 
 def format_report(r):
     regs = r.get("regions", [])
-    s = f"[support] ungrounded (no support chain to the bed): ~{r.get('ungrounded_mm', 0):.0f} mm of extrusion in {len(regs)} regions"
+    s = (f"[support] ungrounded (no support chain to the bed): {r.get('ungrounded_real_mm', 0):.0f} mm of extrusion in "
+         f"{len(regs)} regions, {r.get('ungrounded_wall_mm', 0):.0f} mm of it walls/skin (the rest sparse infill)")
     for g in regs[:3]:
         s += (f"\n[support]   ~{g['mm']:.0f} mm, layers {g['layers'][0]}-{g['layers'][1]}, at {g['centre']}, "
               f"{', '.join(f'{t} {n}' for t, n in g['types'])}")

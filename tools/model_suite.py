@@ -26,7 +26,7 @@ MODELS = ["pi 3mm", "benchy upsidedown tilted", "Squirtle", "dino", "z mount 3mm
 REGIONS = {"pi 3mm": {"bridge_underside": ((-5, 5), (-5.5, 5.5), (9.5, 12.5))}}
 
 # metric: (worse when, tolerance before it counts as a regression)
-CHECKS = {"ungrounded_mm": ("up", 1.0), "island_mm": ("up", 0.5), "cantilever_mm": ("up", 2.0),
+CHECKS = {"ungrounded_mm": ("up", 1.0), "ungrounded_wall_mm": ("up", 1.0), "island_mm": ("up", 0.5), "cantilever_mm": ("up", 2.0),
           "poles": ("up", 0), "along_axis": ("up", 0), "zigzag": ("up_rel", 0.10), "tilt_deg": ("down", 2.0)}
 
 
@@ -55,7 +55,7 @@ def measure(model, gc, log="", seconds=None):
     num = lambda k, d=None: float(hdr[k]) if k in hdr and re.match(r"^-?[\d.]+(e-?\d+)?$", hdr[k]) else d
     r = quality.path_roughness(gc, num("NOZZLE_OFFSET", 42.0))
     m = re.search(r"extruding along the nozzle axis[^:]*: (\d+)", log)
-    res = {k: num(k) for k in ("ungrounded_mm", "island_mm", "cantilever_mm", "bridge_mm", "poles",
+    res = {k: num(k) for k in ("ungrounded_mm", "ungrounded_wall_mm", "island_mm", "cantilever_mm", "bridge_mm", "poles",
                                "estimated_print_time_min")}
     res.update(tilt_deg=num("deform.tilt_deg"), target_tilt_deg=num("deform.target_tilt_deg"),
                along_axis=int(m.group(1)) if m else 0, zigzag=r["count"], segments=r["segments"],
@@ -109,7 +109,7 @@ def main():
     json.dump({"settings": a.set, "cura_settings": a.cura_set, "results": results},
               open(os.path.join(a.out, "summary.json"), "w"), indent=1)
     base = json.load(open(os.path.join(a.baseline, "summary.json")))["results"] if a.baseline else {}
-    cols = ["ungrounded_mm", "island_mm", "cantilever_mm", "bridge_mm", "poles", "along_axis", "tilt_deg", "zigzag",
+    cols = ["ungrounded_mm", "ungrounded_wall_mm", "island_mm", "cantilever_mm", "bridge_mm", "poles", "along_axis", "tilt_deg", "zigzag",
             "estimated_print_time_min"]
     print(f"{'model':26s}" + "".join(f"{c.replace('_mm', '').replace('estimated_print_time_min', 'minutes'):>12s}" for c in cols)
           + "  region zigzag")

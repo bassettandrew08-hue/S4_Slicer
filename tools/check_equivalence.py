@@ -73,8 +73,14 @@ def main():
           + ("" if same_stl else "  (planar G-code from CuraEngine may then differ; the map check below uses the reference slice)"))
     g_ok, _ = compare(ref_out, cand_out, a.tol_pos, a.tol_ang, a.tol_e)
     ok &= g_ok
-    same_gcode = filecmp.cmp(ref_out, cand_out, shallow=False)
-    print(f"final G-code byte-identical: {same_gcode}")
+    # the candidate maps the reference's planar G-code (--sliced-gcode), so its settings block names that file; that
+    # one line is expected to differ, everything else must match byte for byte
+    def _lines(p):
+        with open(p, "rb") as fh:
+            return [ln for ln in fh.read().split(b"\n") if not ln.startswith(b"; s4: planar_gcode = ")]
+    same_gcode = _lines(ref_out) == _lines(cand_out)
+    print(f"final G-code byte-identical (apart from the planar_gcode line): {same_gcode}")
+    ok &= same_gcode
     t = {}
     for label, d in (("reference", ref_dir), (a.impl, cand_dir)):
         for fn in os.listdir(d):
