@@ -34,19 +34,18 @@ DEFAULTS = dict(
     ISLAND_LIFT_SLOPE=0.5,       # mm of rise per mm; 0.5 ~ overhangs up to ~63 deg from vertical in deformed space
     ISLAND_LIFT_ROUNDS=5,
     LIFT_WEIGHT=50.0,
-    LIFT_ANCHOR=0.0,             # > 0: while lifting, hold the grounded vertices at their height (weight x LIFT_WEIGHT)
-    LIFT_ONE_SIDED=False,        # lift targets only push up, never hold a vertex down
-    LIFT_VOLUME_WEIGHTED=False,  # scale each lift target's weight by its vertex's volume share (/ median)
-    LIFT_HOLD=0.0,               # > 0: hold every vertex that was never in a pit at its fit-only height with a
+    # Lifting: hold the part's grounded vertices (anchor) and everything that is not in a pit (hold) where the fit
+    # put them, and only push the pits up (one-sided). Without the anchor the lift mostly translated the whole part
+    # up, and targets left from earlier rounds then pulled vertices back down: creases. The old lift is LIFT_ANCHOR=0,
+    # LIFT_ONE_SIDED=false, LIFT_HOLD=0, LIFT_PRECOND_FLOOR=-1.
+    LIFT_ANCHOR=1.0,             # > 0: while lifting, hold the grounded vertices at their height (weight x LIFT_WEIGHT)
+    LIFT_ONE_SIDED=True,         # lift targets only push up, never hold a vertex down
+    LIFT_HOLD=0.2,               # > 0: hold every vertex that was never in a pit at its fit-only height with a
                                  # two-sided spring (weight x LIFT_WEIGHT), so a pit's rim cannot be dragged up
     LIFT_HOLD_FALLOFF=0.0,       # mm (path length through the mesh): the hold ramps from 0 at the pit to full here
-    LIFT_HOLD_VOLUME_WEIGHTED=False,  # scale the hold by min(1, the vertex's volume share / median)
-    LIFT_PRECOND_FLOOR=-1.0,     # PRECOND_FLOOR for the lifting solves only (< 0: same as the fit's). Lift
+    LIFT_PRECOND_FLOOR=0.3,      # PRECOND_FLOOR for the lifting solves only (< 0: same as the fit's). Lift
                                  # springs pull the whole mesh; without a floor the preconditioned step is huge at
                                  # vertices held only by micro-tets, and a dense micro-tet cluster gets torn apart
-    LIFT_STIFFNESS_FLOOR=0.0,    # > 0: scale every lift-phase z term (targets, anchor, hold) of a vertex by
-                                 # min(1, its fit stiffness / (this x the median)), so springs never overpower the
-                                 # weakly attached vertices of dense micro-tet clusters (which they tear apart)
     BARRIER_WEIGHT=0.02,         # beta
     FLIP_FREE_STAGES=10,
     FLIP_FREE_STAGE_ITERATIONS=150,
@@ -472,19 +471,6 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     if lift:
         tgt = np.full(len(P0), -np.inf)
         w = np.full(len(P0), float(q["LIFT_WEIGHT"]))
-        # each vertex's share of the volume (/ median): a vertex held only by tiny tets has almost no fit stiffness,
-        # and a full-weight target would tear it away from its neighbours
-        vv = np.zeros(len(P0))
-        for k in range(4):
-            np.add.at(vv, np.asarray(cells)[:, k], prob.vol / 4)
-        vv /= np.median(vv)
-        if q["LIFT_VOLUME_WEIGHTED"]:
-            w *= vv
-        soft = np.ones(len(P0))
-        if float(q["LIFT_STIFFNESS_FLOOR"]) > 0:
-            dK = prob.K_raw.diagonal()
-            soft = np.minimum(1.0, dK / (float(q["LIFT_STIFFNESS_FLOOR"]) * np.median(dK)))
-            w *= soft
         anchor = None
         if float(q["LIFT_ANCHOR"]) > 0:
             g0 = _grounded(V, bed)
@@ -492,9 +478,6 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
         if float(q["LIFT_PRECOND_FLOOR"]) >= 0 and float(q["LIFT_PRECOND_FLOOR"]) != float(q["PRECOND_FLOOR"]):
             prob.set_precond_floor(float(q["LIFT_PRECOND_FLOOR"]))
         hold_w = np.full(len(P0), float(q["LIFT_HOLD"]) * float(q["LIFT_WEIGHT"]))
-        if q["LIFT_HOLD_VOLUME_WEIGHTED"]:
-            hold_w *= np.minimum(vv, 1.0)  # weaker where tiny tets give a vertex little fit stiffness
-        hold_w *= soft
         V_fit = V.copy()
         held = np.ones(len(P0), bool)
         if anchor is not None:

@@ -27,14 +27,11 @@ DEFAULT_PARAMS = dict(
     ISLAND_LIFT_SLOPE=0.5,         # island_free: minimum rise per mm from the bed (0.5 ~ 63 deg overhang)
     ISLAND_LIFT_ROUNDS=5,
     LIFT_WEIGHT=50.0,
-    LIFT_ANCHOR=0.0,               # island_free: > 0 holds the grounded vertices still while lifting (x LIFT_WEIGHT)
-    LIFT_ONE_SIDED=False,          # island_free: lift targets only push up, never hold a vertex down
-    LIFT_VOLUME_WEIGHTED=False,    # island_free: lift target weight x the vertex's volume share (/ median)
-    LIFT_HOLD=0.0,                 # island_free: > 0 holds never-in-a-pit vertices at their fit height (x LIFT_WEIGHT)
+    LIFT_ANCHOR=1.0,               # island_free: > 0 holds the grounded vertices still while lifting (x LIFT_WEIGHT)
+    LIFT_ONE_SIDED=True,           # island_free: lift targets only push up, never hold a vertex down
+    LIFT_HOLD=0.2,                 # island_free: > 0 holds never-in-a-pit vertices at their fit height (x LIFT_WEIGHT)
     LIFT_HOLD_FALLOFF=0.0,         # island_free: mm over which that hold ramps up with distance from the pit
-    LIFT_HOLD_VOLUME_WEIGHTED=False,  # island_free: hold x min(1, vertex volume share / median)
-    LIFT_PRECOND_FLOOR=-1.0,       # island_free: PRECOND_FLOOR for the lifting solves only (< 0 = the fit's)
-    LIFT_STIFFNESS_FLOOR=0.0,      # island_free: lift z terms x min(1, vertex fit stiffness / (this x median))
+    LIFT_PRECOND_FLOOR=0.3,        # island_free: PRECOND_FLOOR for the lifting solves only (< 0 = the fit's)
     BARRIER_WEIGHT=0.02,
     FLIP_FREE_STAGES=10,
     FLIP_FREE_STAGE_ITERATIONS=150,
