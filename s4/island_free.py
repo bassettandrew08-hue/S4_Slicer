@@ -34,6 +34,9 @@ DEFAULTS = dict(
     ISLAND_LIFT_SLOPE=0.5,       # mm of rise per mm; 0.5 ~ overhangs up to ~63 deg from vertical in deformed space
     ISLAND_LIFT_ROUNDS=5,
     LIFT_WEIGHT=50.0,
+    LIFT_ANCHOR=0.0,             # > 0: while lifting, hold the grounded vertices at their height (weight x LIFT_WEIGHT)
+    LIFT_ONE_SIDED=False,        # lift targets only push up, never hold a vertex down
+    LIFT_VOLUME_WEIGHTED=False,  # scale each lift target's weight by its vertex's volume share (/ median)
     BARRIER_WEIGHT=0.02,         # beta
     FLIP_FREE_STAGES=10,
     FLIP_FREE_STAGE_ITERATIONS=150,
@@ -231,6 +234,7 @@ class FitProblem:
         self.dDs = np.empty((len(self.cells), 3, 3))
         self.R = None
         self.lift_idx = np.zeros(0, np.int64); self.lift_t = np.zeros(0); self.lift_w = np.zeros(0)
+        self.lift_up = np.zeros(0, bool)
         # stiffness (Hessian of sum vol |J|^2 per coordinate, /2)
         Gi = self.Dm_inv  # rows of Dm^-1 are the basis-function gradients (J = Ds Dm^-1)
         G = np.concatenate([-Gi.sum(axis=1, keepdims=True), Gi], axis=1)
@@ -251,11 +255,17 @@ class FitProblem:
             return np.inf, None
         E = float(np.sum(self.e))
         g = _scatter(self.cells, self.dDs, self.n)
-        if len(self.lift_idx):
-            dz = V[self.lift_idx, 2] - self.lift_t
-            E += float(np.sum(self.lift_w * dz * dz))
-            np.add.at(g[:, 2], self.lift_idx, 2.0 * self.lift_w * dz)
-        return E, g.ravel()
+        return E + self._lift_terms(V, g), g.ravel()
+
+    def _lift_terms(self, V, g):
+        """Soft z targets: w (z - t)^2, or only while z < t for the one-sided ones. Adds to g, returns the energy."""
+        if not len(self.lift_idx):
+            return 0.0
+        dz = V[self.lift_idx, 2] - self.lift_t
+        if self.lift_up.any():
+            dz = np.where(self.lift_up & (dz > 0.0), 0.0, dz)
+        np.add.at(g[:, 2], self.lift_idx, 2.0 * self.lift_w * dz)
+        return float(np.sum(self.lift_w * dz * dz))
 
     def max_step(self, x, d):
         return float(_max_step(x.reshape(-1, 3), np.ascontiguousarray(d.reshape(-1, 3)), self.cells, self.Dm_inv, self.guard, 1.2, self.step_rho).min())
@@ -277,9 +287,10 @@ class FitProblem:
     def solve(self, R, x0, max_iter, lift=None, m=10, tol=1e-7):
         self.R = np.ascontiguousarray(R)
         if lift is None:
-            self.lift_idx = np.zeros(0, np.int64); self.lift_t = np.zeros(0); self.lift_w = np.zeros(0)
-        else:
-            self.lift_idx, self.lift_t, self.lift_w = lift
+            lift = (np.zeros(0, np.int64), np.zeros(0), np.zeros(0))
+        self.lift_idx, self.lift_t, self.lift_w = lift[:3]
+        # optional 4th entry: True = one-sided target (only pushes up, never holds a vertex down)
+        self.lift_up = np.asarray(lift[3], bool) if len(lift) > 3 else np.zeros(len(self.lift_idx), bool)
         H0 = self.preconditioner()
         x = x0.ravel().copy()
         E, g = self.energy_grad(x)
@@ -429,6 +440,18 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     lifted = 0
     if lift:
         tgt = np.full(len(P0), -np.inf)
+        w = np.full(len(P0), float(q["LIFT_WEIGHT"]))
+        if q["LIFT_VOLUME_WEIGHTED"]:
+            # weight each target by the vertex's share of the volume: a vertex held only by tiny tets has almost no
+            # fit stiffness, and a full-weight target would tear it away from its neighbours
+            vv = np.zeros(len(P0))
+            for k in range(4):
+                np.add.at(vv, np.asarray(cells)[:, k], prob.vol / 4)
+            w *= vv / np.median(vv)
+        anchor = None
+        if float(q["LIFT_ANCHOR"]) > 0:
+            g0 = _grounded(V, bed)
+            anchor = (g0, V[g0, 2].copy(), float(q["LIFT_ANCHOR"]) * w[g0], np.zeros(len(g0), bool))
         for _ in range(int(q["ISLAND_LIFT_ROUNDS"])):
             h = priority_flood(V, nbrs, float(q["ISLAND_LIFT_SLOPE"]), bed_tol=0.5,
                                bed=_grounded(V, bed))
@@ -437,9 +460,12 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
                 break
             tgt = np.maximum(tgt, np.where(need, h, -np.inf))
             idx = np.nonzero(np.isfinite(tgt))[0].astype(np.int64)
-            targets = (idx, tgt[idx], np.full(len(idx), float(q["LIFT_WEIGHT"])))
-            if pin is not None:
-                targets = tuple(np.concatenate([a, b]) for a, b in zip(targets, pin))
+            targets = (idx, tgt[idx], w[idx], np.full(len(idx), bool(q["LIFT_ONE_SIDED"])))
+            for extra in (anchor, pin):
+                if extra is not None:
+                    if len(extra) == 3:
+                        extra = extra + (np.zeros(len(extra[0]), bool),)
+                    targets = tuple(np.concatenate([a, b]) for a, b in zip(targets, extra))
             V, it = prob.solve(R, V, int(q["LIFT_ITERATIONS"]) if q["FIT_METHOD"] == "penalty" else 300,
                                lift=targets)
             iters += it
@@ -519,11 +545,7 @@ class PenaltyProblem(FitProblem):
         _tet_terms_penalty(V, self.cells, self.Dm_inv, self.vol, self.R, self.gamma, self.eps, self.e, self.dDs)
         E = float(np.sum(self.e))
         g = _scatter(self.cells, self.dDs, self.n)
-        if len(self.lift_idx):
-            dz = V[self.lift_idx, 2] - self.lift_t
-            E += float(np.sum(self.lift_w * dz * dz))
-            np.add.at(g[:, 2], self.lift_idx, 2.0 * self.lift_w * dz)
-        return E, g.ravel()
+        return E + self._lift_terms(V, g), g.ravel()
 
     def max_step(self, x, d):
         return 1.2  # no hard constraint
