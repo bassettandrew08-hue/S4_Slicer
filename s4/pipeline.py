@@ -132,6 +132,8 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     stats["poles"] = len(poles[0])
     if support_check:
         stats["ungrounded_mm"] = round(support["ungrounded_mm"], 1)
+        stats["ungrounded_real_mm"] = round(support["ungrounded_real_mm"], 1)
+        stats["ungrounded_wall_mm"] = round(support["ungrounded_wall_mm"], 1)
         for k in ("island", "cantilever", "bridge"):  # floating runs by what their ends attach to
             stats[f"{k}_mm"] = round(support["runs"][k]["length_mm"], 1)
     # the time R-Theta Sim will show for this file (same planner; the settings header is comments only)
