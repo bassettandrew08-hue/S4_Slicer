@@ -12,7 +12,6 @@ What changed vs. the notebook (all output-preserving):
   * the stateful smoothing/interpolation loop runs on plain Python floats
   * output lines are formatted with the same format specs and written in one go
 """
-import math
 import re
 
 import numpy as np
@@ -200,8 +199,8 @@ def vertex_volume_ratio(cells, vol0, vold, n_points):
 
 def map_gcode(input_cells, input_points, input_centers, def_points, def_centers, find_cells, gcode_path, mp=None):
     """
-    find_cells(points) -> (containing, closest_or_None_fn) implemented by the caller with VTK.
-    Returns (new_points dict-of-lists, stats).
+    find_cells(points) -> containing cell id per point (closest cell where none contains it), implemented by the
+    caller with VTK (meshio_s4.make_find_cells). Returns (new_points dict-of-lists, stats).
     """
     mp = {**MAPPING_DEFAULTS, **(mp or {})}
 
@@ -239,7 +238,7 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
             squish_all = z_squish_scales[containing]
 
     with TIMER("sequential smoothing loop"):
-        out = _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp)
+        out = _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp)
     stats = {
         "lost_vertices": out.pop("_lost"),
         "gcode_points": len(P),
@@ -249,7 +248,7 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
     return out, stats
 
 
-def _sequential(P, new_pos_all, rot_all, bary_ok, squish_all, g, mp):
+def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
     ALPHA = mp["ROTATION_AVERAGING_ALPHA"]
     RET = mp["RETRACTION_LENGTH"]
     MAXD = mp["ROTATION_MAX_DELTA"]
