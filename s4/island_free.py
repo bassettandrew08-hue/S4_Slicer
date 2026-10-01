@@ -37,6 +37,9 @@ DEFAULTS = dict(
     LIFT_ANCHOR=0.0,             # > 0: while lifting, hold the grounded vertices at their height (weight x LIFT_WEIGHT)
     LIFT_ONE_SIDED=False,        # lift targets only push up, never hold a vertex down
     LIFT_VOLUME_WEIGHTED=False,  # scale each lift target's weight by its vertex's volume share (/ median)
+    LIFT_HOLD=0.0,               # > 0: hold every vertex that was never in a pit at its fit-only height with a
+                                 # two-sided spring (weight x LIFT_WEIGHT), so a pit's rim cannot be dragged up
+    LIFT_HOLD_FALLOFF=0.0,       # mm (path length through the mesh): the hold ramps from 0 at the pit to full here
     BARRIER_WEIGHT=0.02,         # beta
     FLIP_FREE_STAGES=10,
     FLIP_FREE_STAGE_ITERATIONS=150,
@@ -407,6 +410,23 @@ def _grounded(V, bed, tol=0.5):
     return np.union1d(bed, np.nonzero(V[:, 2] <= V[:, 2].min() + tol)[0]).astype(np.int64)
 
 
+def _hold_targets(V, nbrs, pit, held, weight, falloff):
+    """Two-sided z springs (per-vertex weight) at V's height for the held vertices outside the pit, ramping (smoothstep) from 0 at
+    the pit to full weight at a path length of falloff mm through the mesh."""
+    keep = held.copy(); keep[pit] = False
+    idx = np.nonzero(keep)[0].astype(np.int64)
+    w = weight[idx].copy()
+    if falloff > 0 and len(pit):
+        from scipy.sparse import csr_matrix
+        from scipy.sparse.csgraph import dijkstra
+        a = np.repeat(np.arange(len(nbrs)), [len(x) for x in nbrs]); b = np.concatenate([np.asarray(x, np.int64) for x in nbrs])
+        G = csr_matrix((np.linalg.norm(V[a] - V[b], axis=1) + 1e-9, (a, b)), shape=(len(nbrs), len(nbrs)))
+        d = dijkstra(G, directed=False, indices=pit, min_only=True, limit=falloff)
+        t = np.clip(d[idx] / falloff, 0.0, 1.0)
+        w *= t * t * (3.0 - 2.0 * t)
+    return idx, V[idx, 2].copy(), w, np.zeros(len(idx), bool)
+
+
 def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     """Fold-free fit of the rotation field, then island lifting. Returns (new vertex positions, info dict)."""
     q = {**DEFAULTS, **{k: p[k] for k in DEFAULTS if k in p}}
@@ -441,17 +461,26 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     if lift:
         tgt = np.full(len(P0), -np.inf)
         w = np.full(len(P0), float(q["LIFT_WEIGHT"]))
+        # each vertex's share of the volume (/ median): a vertex held only by tiny tets has almost no fit stiffness,
+        # and a full-weight target would tear it away from its neighbours
+        vv = np.zeros(len(P0))
+        for k in range(4):
+            np.add.at(vv, np.asarray(cells)[:, k], prob.vol / 4)
+        vv /= np.median(vv)
         if q["LIFT_VOLUME_WEIGHTED"]:
-            # weight each target by the vertex's share of the volume: a vertex held only by tiny tets has almost no
-            # fit stiffness, and a full-weight target would tear it away from its neighbours
-            vv = np.zeros(len(P0))
-            for k in range(4):
-                np.add.at(vv, np.asarray(cells)[:, k], prob.vol / 4)
-            w *= vv / np.median(vv)
+            w *= vv
         anchor = None
         if float(q["LIFT_ANCHOR"]) > 0:
             g0 = _grounded(V, bed)
             anchor = (g0, V[g0, 2].copy(), float(q["LIFT_ANCHOR"]) * w[g0], np.zeros(len(g0), bool))
+        # weaker where tiny tets give a vertex little fit stiffness (a strong spring there tears the mesh sideways)
+        hold_w = float(q["LIFT_HOLD"]) * float(q["LIFT_WEIGHT"]) * np.minimum(vv, 1.0)
+        V_fit = V.copy()
+        held = np.ones(len(P0), bool)
+        if anchor is not None:
+            held[anchor[0]] = False
+        if pin is not None:
+            held[pin[0]] = False
         for _ in range(int(q["ISLAND_LIFT_ROUNDS"])):
             h = priority_flood(V, nbrs, float(q["ISLAND_LIFT_SLOPE"]), bed_tol=0.5,
                                bed=_grounded(V, bed))
@@ -461,7 +490,10 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
             tgt = np.maximum(tgt, np.where(need, h, -np.inf))
             idx = np.nonzero(np.isfinite(tgt))[0].astype(np.int64)
             targets = (idx, tgt[idx], w[idx], np.full(len(idx), bool(q["LIFT_ONE_SIDED"])))
-            for extra in (anchor, pin):
+            hold = None
+            if float(q["LIFT_HOLD"]) > 0:
+                hold = _hold_targets(V_fit, nbrs, idx, held, hold_w, float(q["LIFT_HOLD_FALLOFF"]))
+            for extra in (anchor, pin, hold):
                 if extra is not None:
                     if len(extra) == 3:
                         extra = extra + (np.zeros(len(extra[0]), bool),)
