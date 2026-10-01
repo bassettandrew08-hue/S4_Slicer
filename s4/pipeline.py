@@ -56,7 +56,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
         # inside the part as a floating blob; the S4 header already primes at home (G1 E10).
         overrides["machine_start_gcode"] = "G28 ; home"
     name = os.path.splitext(os.path.basename(model_path))[0]
-    work_dir = work_dir or os.path.join("build", name)
+    work_dir = work_dir or os.path.join(profiles.HERE, "build", name)  # profiles.HERE: the repo root
     os.makedirs(work_dir, exist_ok=True)
     os.makedirs(os.path.dirname(os.path.abspath(out_gcode)), exist_ok=True)
     with open(os.path.join(work_dir, "params_used.json"), "w", encoding="utf-8") as fh:
