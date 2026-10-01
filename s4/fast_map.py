@@ -18,6 +18,9 @@ import numpy as np
 
 from .timing import TIMER
 
+# The notebook-exact baseline: every output fix off, the notebook's 1 mm retraction. map_gcode fills in from here
+# whatever its caller leaves out. The user-facing defaults (fixes on, with what each flag does) are
+# s4/profile.py MAP_DEFAULTS; the pipeline always passes a full map section from there.
 MAPPING_DEFAULTS = dict(
     SEG_SIZE=0.6,
     MAX_ROTATION=30,
@@ -27,17 +30,9 @@ MAPPING_DEFAULTS = dict(
     RETRACTION_LENGTH=1.0,
     ROTATION_MAX_DELTA=float(np.deg2rad(1)),
     MAX_EXTRUSION_MULTIPLIER=10,
-    # False = notebook-exact. True = retract/unretract in place (E-only line at Cura's feed) instead of
-    # extruding +/-RETRACTION_LENGTH during the 1 mm travel lift/plunge (which leaves filament "sticks").
     SPLIT_RETRACTIONS=False,
-    # False = notebook-exact: extrusion is scaled by each tet's volume ratio (constant per tet, so it jumps at
-    # tet boundaries). True = volume-weighted per-vertex ratio, interpolated barycentrically like position.
     SMOOTH_EXTRUSION_MULTIPLIER=False,
-    EXTRUSION_MULTIPLIER_RANGE=None,  # e.g. (0.5, 2.0): clamp the volume-ratio multiplier
-    # False = notebook-exact. True = (a) after a travel that left the part (lifted to the highest printed point),
-    # lower to the re-entry point's true height before the next move instead of printing downward from the lifted
-    # point (that drew vertical "poles"); (b) rotation-interpolation steps carry the command of the move they belong
-    # to (the notebook used the previous move's, giving extruding G00 lines and non-extruding G01 lines).
+    EXTRUSION_MULTIPLIER_RANGE=None,
     SAFE_TRAVEL_TRANSITIONS=False,
 )
 

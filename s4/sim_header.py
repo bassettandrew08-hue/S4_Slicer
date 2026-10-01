@@ -17,6 +17,8 @@ import os
 import re
 import subprocess
 
+from .profile import DEG_KEYS  # angle settings, shown as deg2rad(<degrees>)
+
 HEAD = re.compile(r"^;\s*(FLAVOR|TIME|Filament used|Layer height|MINX|MINY|MINZ|MAXX|MAXY|MAXZ|Generated with|"
                   r"TARGET_MACHINE\.NAME|PRINT\.TIME|NOZZLE_DIAMETER|MATERIAL)(\s*[:=]|\s)", re.I)
 SENTINEL = "2.14748e+06"   # CuraEngine's placeholder for MINX..MAXZ when not run from the Cura GUI
@@ -92,9 +94,6 @@ def _fmt(v):
     if isinstance(v, (list, tuple)):
         return ", ".join(_fmt(x) for x in v)
     return str(v)
-
-
-DEG_KEYS = ("MAX_POS_ROTATION", "MAX_NEG_ROTATION", "ROTATION_MAX_DELTA")
 
 
 def _fmt_param(k, v):
