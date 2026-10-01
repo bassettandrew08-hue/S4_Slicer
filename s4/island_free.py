@@ -223,6 +223,14 @@ def mean_ratio(P, cells):
 
 
 class FitProblem:
+    """Fold-free fit of a tet mesh to per-tet target rotations (FIT_METHOD 'barrier'), plus soft z targets.
+
+    Energy over vertex positions V: sum_c vol_c (|J_c - R_c|^2 + beta (|J_c|^2 + |J_c^-1|^2 - 6)) + lift terms,
+    J_c the deformation gradient of tet c (Ds Dm^-1). The barrier term is infinite at zero volume, and max_step caps
+    every step before the first guarded tet would flip. Slivers and micro-tets (sliver_quality, micro_volume) are
+    unguarded: rotation term only. The preconditioner is the mesh stiffness matrix K (Laplacian-like, per
+    coordinate), floored at precond_floor x median per vertex. PenaltyProblem swaps the barrier for a soft penalty.
+    """
     def __init__(self, P0, cells, beta, sliver_quality=0.0, step_rho=0.0, micro_volume=0.0, precond_floor=0.0):
         self.P0 = np.ascontiguousarray(P0, dtype=np.float64)
         self.cells = np.ascontiguousarray(cells, dtype=np.int64)
@@ -299,6 +307,13 @@ class FitProblem:
         return H0
 
     def solve(self, R, x0, max_iter, lift=None, m=10, tol=1e-7):
+        """Minimise the energy for target rotations R (n_cells, 3, 3) from x0 with preconditioned L-BFGS (memory m).
+
+        lift: soft z targets (vertex ids, target z, weights[, one-sided flags]); one-sided ones only push up.
+        The step starts at the largest fold-free step (max_step) and is halved until the Armijo condition holds.
+        Stops after max_iter iterations, when the relative energy drop falls below tol, or when no step is found.
+        Returns (vertex positions (n, 3), iterations used).
+        """
         self.R = np.ascontiguousarray(R)
         if lift is None:
             lift = (np.zeros(0, np.int64), np.zeros(0), np.zeros(0))

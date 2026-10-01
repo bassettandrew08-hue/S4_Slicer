@@ -231,6 +231,20 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
 
 
 def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
+    """Walk the segmented planar moves in order and emit the 4-axis moves (notebook cell 17's loop).
+
+    Inputs per planar point: new_pos_all = position mapped back to the part, rot_all = B tilt (rad), bary_ok =
+    whether it lies in a tet, squish_all = extrusion multiplier; g = the planar moves (commands, E, feeds).
+    Per point: points outside the part drop print moves and turn travels into a lift to the highest printed
+    point; B is smoothed (ROTATION_AVERAGING_ALPHA) and steps over ROTATION_MAX_DELTA are split; E is scaled.
+    The o_* lists are the output moves, one entry each: position, rotation, command, extrusion, inverse-time feed,
+    travelling (z-hop) flag, planar feed, e_only (zero-motion retract/unretract line).
+
+    Flags (all False = notebook-exact; S4_PIPELINE.md 'Differences from the notebook'): SPLIT (SPLIT_RETRACTIONS)
+    retracts/unretracts in place as e_only moves; SAFE (SAFE_TRAVEL_TRANSITIONS) lowers to the true re-entry
+    height after a travel that left the part, keeps each split step's own command and clamps z < 0 to the bed;
+    MRANGE (EXTRUSION_MULTIPLIER_RANGE) clamps the multiplier. Returns the o_* lists as a dict, plus '_lost'.
+    """
     ALPHA = mp["ROTATION_AVERAGING_ALPHA"]
     RET = mp["RETRACTION_LENGTH"]
     MAXD = mp["ROTATION_MAX_DELTA"]

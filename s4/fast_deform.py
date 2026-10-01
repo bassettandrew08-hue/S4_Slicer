@@ -253,6 +253,14 @@ def planeFit(points):
 
 
 def path_length_to_base_gradient(ctx, tet, MAX_OVERHANG, INITIAL_ROTATION_FIELD_SMOOTHING, SET_INITIAL_ROTATION_TO_ZERO):
+    """Notebook calculate_path_length_to_base_gradient: per cell, which way the tilt should go.
+
+    For overhang cells (surface faces steeper than MAX_OVERHANG, not on the bottom) take the path length through
+    the mesh to the bottom, fit a plane to it over the cell's edge neighbours and dot its gradient with the radial
+    direction: +/- says whether the path to the base grows outward or inward. Then one smoothing pass over point
+    neighbours. Cells without a value get NaN (or 0 with SET_INITIAL_ROTATION_TO_ZERO). Also stored in
+    tet.cell_data['path_length_to_base_gradient'].
+    """
     # tet: the mesh being deformed this iteration; ctx: original mesh (the notebook's globals:
     # neighbour graph, bottom_cells and its Dijkstra search are always those of the input mesh)
     n = tet.number_of_cells
@@ -335,6 +343,12 @@ def initial_rotation_field(ctx, tet, p):
 
 
 def optimize_rotations(ctx, tet, p, verbose=0):
+    """Notebook optimize_rotations: the rotation (tilt) field, one angle in rad per cell.
+
+    Least squares over the per-cell angles x: residuals NEIGHBOUR_LOSS_WEIGHT * (x_a - x_b)^2 for every pair of
+    face neighbours (smoothness) and (x_c - initial_c)^2 for every cell with an initial rotation (the overhang
+    fix), squared as in the notebook. TRF with ROTATION_ITERATIONS evaluations, starting from 0.
+    """
     with TIMER("initial rotation field"):
         irf = initial_rotation_field(ctx, tet, p)
     valid = np.where(~np.isnan(irf))[0]
@@ -372,6 +386,13 @@ def rotation_matrices(tet, rotation_field):
 
 
 def calculate_deformation(tet, rotation_field, iterations, verbose=0):
+    """Notebook calculate_deformation (DEFORMATION_METHOD 'notebook'): new vertex positions for the rotation field.
+
+    Least squares over all vertex coordinates: per cell, |N V_c - R_c N V0_c|^2, i.e. the cell's centred vertices
+    should be its original centred vertices rotated by R_c (squared again, as in the notebook). TRF with
+    `iterations` evaluations from the undeformed mesh; it does not converge, and folds tets (see island_free).
+    Returns (n_points, 3).
+    """
     cells = tet.field_data["cells"]
     n_cells = tet.number_of_cells
     n_pts = tet.number_of_points

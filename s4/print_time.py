@@ -132,6 +132,16 @@ def parse(lines, m):
 
 @_njit
 def _plan(typ, feed, dwell, inv, c, vmax, amax, vE, aE, jerk, home_speed):
+    """The sim's plan(): total seconds for the parsed moves (typ, feed, dwell, inv; c = positions X Z B C E, one row
+    more than moves). The names mirror the sim's JavaScript on purpose, so the two can be compared line by line.
+
+    Per move i: L = move length (X/Z mm, else B/C deg, else E mm), vc = cruise speed (the feed, lowered so no axis
+    exceeds vmax / vE), acc = limiting acceleration along the move, kind 1/2/3 = X/Z, B/C only, E only, U = unit
+    direction in speed-normalised axis space. J = junction speeds (J[i] at the start of move i): from the corner
+    speed floor (jerk) and the direction change, only between moves of the same kind; then a backward and a
+    forward pass limit them by what acc can reach over L. Each move is a trapezoid (or triangle) from J[i] to
+    J[i + 1]; dwells (typ 4) add their time.
+    """
     n = len(typ)
     L = np.zeros(n)
     vc = np.zeros(n)

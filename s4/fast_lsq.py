@@ -88,6 +88,9 @@ class FastJacobian:
 
 @contextmanager
 def fast_trf(fj):
+    """Context manager: while active, scipy's TRF does J @ x and J.T @ v with fj's numba kernels whenever J is the
+    matrix fj built last (fj.owns(J)); any other Jacobian goes through scipy's own code. Bit-identical results.
+    """
     orig_grad = _trf.compute_grad
     orig_rmo = _trf.right_multiplied_operator
 

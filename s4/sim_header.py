@@ -113,6 +113,10 @@ def git_version():
 
 
 def s4_lines(model_name, profile, stats, deform_info=None, planar_source=None):
+    """The '; s4: KEY = value' lines: model, pipeline version, every deform setting (and per-iteration overrides),
+    every map setting, the Cura config and overrides, the deformation diagnostics (without timings, so the file
+    stays deterministic) and the run's stats. Angles are shown as deg2rad(<degrees>).
+    """
     from .params import expand_iterations
     out = [f"; s4: model = {model_name}", f"; s4: pipeline_version = {git_version()}"]
     if profile.get("description"):

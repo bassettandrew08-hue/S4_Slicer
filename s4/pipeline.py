@@ -27,6 +27,17 @@ def planar_retraction(planar_path, default=1.0):
 def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_engine=None, sliced_gcode=None,
         save_gif=False, save_pickle=False, support_check=True, params=None, log=print):
     """
+    STL -> 4-axis G-code at out_gcode. Stages:
+      1. deform: tetgen mesh, rotation field, deformed mesh (fast_deform / island_free, or reference.deform)
+         -> <work_dir>/<model>_deformed_tet.stl and deformed_points.npy
+      2. slice: CuraEngine on the deformed STL (skipped with sliced_gcode)
+      3. map: planar G-code back to the 4-axis machine (fast_map, or reference.map_gcode), then the axis speed
+         limits (feed_limits, if LIMIT_AXIS_SPEEDS)
+      4. support check (support_check), then the poles / along-the-nozzle-axis check (quality) and the
+         print-time estimate (print_time)
+      5. settings header for R-Theta Sim (sim_header) prepended to the G-code; timings_<impl>.json
+    The fast and reference branches must give identical results (tools/check_equivalence.py).
+
     profile: build profile from s4.profile.resolve() (deform / map / cura settings). None = defaults.
     params: shortcut for a partial profile dict (e.g. {"deform": {...}} or a legacy flat params dict).
     impl: "fast" (default) or "reference" (the verified notebook port, slow).
