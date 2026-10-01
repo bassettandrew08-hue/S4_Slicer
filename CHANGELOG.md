@@ -1,12 +1,25 @@
 # Changelog
 
 Changes in this fork relative to [jyjblrd/S4_Slicer](https://github.com/jyjblrd/S4_Slicer). Newest first. How to use the
-pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy upsidedown tilted` (33,156 tets) and
-`pi 3mm` models with default settings, unless noted.
+pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fix is in
+[docs/SETTINGS.md](docs/SETTINGS.md#differences-from-the-notebook). Measurements are on the
+`benchy upsidedown tilted` (33,156 tets) and `pi 3mm` models with default settings, unless noted.
+
+**Entries**
+- [2026-10-01: Smoother lifted surfaces, six-model quality suite](#2026-10-01-smoother-lifted-surfaces-six-model-quality-suite)
+- [2026-10-01: Bug fixes, cleanup, path-roughness view](#2026-10-01-bug-fixes-cleanup-path-roughness-view)
+- [2026-09-28: R-Theta Sim in the repo, print times in sync](#2026-09-28-r-theta-sim-in-the-repo-print-times-in-sync)
+- [2026-09-28: Realistic axis speeds](#2026-09-28-realistic-axis-speeds)
+- [2026-09-28: Nozzle tilt on every model (Squirtle had none)](#2026-09-28-nozzle-tilt-on-every-model-squirtle-had-none)
+- [2026-09-27: Settings block for R-Theta Sim](#2026-09-27-settings-block-for-r-theta-sim)
+- [2026-09-27: No more "poles" at the base](#2026-09-27-no-more-poles-at-the-base)
+- [2026-09-27: Island-free deformation](#2026-09-27-island-free-deformation)
+- [2026-09-26: Output fixes, build profiles, docs](#2026-09-26-output-fixes-build-profiles-docs)
+- [2026-09-25: Headless pipeline](#2026-09-25-headless-pipeline)
 
 ---
 
-## 2026-10-02: Smoother lifted surfaces without losing support; six-model quality suite
+## 2026-10-01: Smoother lifted surfaces, six-model quality suite
 
 ### Changed
 - **New default island lift** (`s4/island_free.py`). The pi's bridge underside printed as a rough zig-zag patch.
@@ -53,11 +66,11 @@ No poles, no extrusion along the nozzle axis, tilt unchanged or slightly up. The
   `planar_gcode` line (the `--sliced-gcode` run names its planar file). Before, it only printed the result.
 
 ### Tried and not adopted (measured on all six models)
-- **Fading the tilt near the turntable axis:** didn't help the pi, and cost Squirtle and benchy support.
-- **Smaller `SEG_SIZE`, or splitting paths exactly at tet faces:** the exact path is itself rough where tets are
-  squashed, and the 0.6 mm sampling hides some of it. Both made the pi bridge worse.
-- **A minimum tet weight in the fit:** didn't close Squirtle's tear cleanly.
-- **Moving the part off the axis:** helped the bridge, but moved the part and left cantilevers at the pi pillars.
+- Fading the tilt near the turntable axis: no help for the pi, and it cost Squirtle and benchy support.
+- Smaller `SEG_SIZE`, or splitting paths exactly at tet faces: both made the pi bridge worse (the exact path is
+  itself rough where tets are squashed; the 0.6 mm sampling hides some of it).
+- A minimum tet weight in the fit: didn't close Squirtle's tear cleanly.
+- Moving the part off the axis: helped the bridge, but moved the part and left cantilevers at the pi pillars.
 
 ---
 
@@ -86,6 +99,9 @@ No poles, no extrusion along the nozzle axis, tilt unchanged or slightly up. The
 ### Changed
 - **Code cleanup, no change in output:** unused imports, arguments and constants removed, inline imports hoisted,
   stale docstrings fixed.
+- **Docs split by reader:** `S4_PIPELINE.md` is the user guide; the settings reference moved to
+  `docs/SETTINGS.md`, the developer notes to `docs/DEVELOPING.md`, and R-Theta Sim's usage to `sim/README.md`.
+  `README.md` gained a quick start and a map of the repository.
 
 ---
 
@@ -295,24 +311,22 @@ No model has poles. Squirtle's deformation takes about 85 s.
 | benchy, 5-iteration recipe: ungrounded extrusion | – | ~51 mm |
 
 ### Investigation
-- **Where the islands come from.** Cura slices the deformed shape flat, so every local low point of that shape (lower
-  than its surroundings, not on the bed) starts printing in mid-air. Such low points, measured by how long they float
-  before joining the bed-connected part, match the toolpath islands exactly. The benchy's two islands are its two
-  largest low points.
-- **Why the notebook leaves them.** Its deformation solve stops at 1000 evaluations, unconverged. It misses its own
-  target rotations by 9° median (26° at the 95th percentile), and folds 202 tets. Near the islands the target tilt is
-  also too small: flat downward faces need about 60°, and the smoothing settles at about 43°.
-- **Joshua's original has them too.** His committed pi toolpath has 17 mm of ungrounded extrusion, about the same as
-  the notebook method here. His vertex order couldn't be matched to ours (a different tetgen version), so this was
-  measured on his planar toolpath directly.
-- **Tried and rejected:**
-  - parameter tuning: the pi moved between 0.18% and 0.77% floating, never to zero, and B hit its −130° limit
-  - moving the part off-centre: no help
-  - an exact linear deformation solve: better fit, but more floating extrusion (2,000 mm)
-  - quadratic rotation smoothing: worse
-  - per-cell overhang feedback: worse
-  - lifting heights directly: inverted thousands of tets
-  - pinning the bottom face flat: jammed the solver
+- Where the islands come from: Cura slices the deformed shape flat, so every local low point of it (not on the bed)
+  starts printing in mid-air. These low points match the toolpath islands exactly; the benchy's two islands are its
+  two largest.
+- Why the notebook leaves them: its solve stops at 1000 evaluations, unconverged. It misses its own target rotations
+  by 9° median (26° at the 95th percentile) and folds 202 tets. Near the islands the target tilt is also too small
+  (flat downward faces need about 60°; the smoothing settles at about 43°).
+- Joshua's original has them too: his committed pi toolpath has 17 mm of ungrounded extrusion, about the same as the
+  notebook method here (measured on his planar toolpath, since tetgen versions differ).
+
+### Tried and not adopted
+- Parameter tuning: the pi moved between 0.18% and 0.77% floating, never to zero, and B hit its −130° limit.
+- Moving the part off-centre: no help.
+- An exact linear deformation solve: better fit, but more floating extrusion (2,000 mm).
+- Quadratic rotation smoothing, per-cell overhang feedback: worse.
+- Lifting heights directly: inverted thousands of tets.
+- Pinning the bottom face flat: jammed the solver.
 
 ---
 
@@ -329,7 +343,7 @@ No model has poles. Squirtle's deformation takes about 85 s.
   cantilever and bridge runs.
 - **Settings tutorial** in `S4_PIPELINE.md`, plus `requirements.txt` with the verified package versions.
 
-### Fixed (on by default; `--notebook-exact` restores the notebook's behaviour)
+### Fixed (on by default; `--notebook-exact` restores the notebook's behaviour, [which setting is which](docs/SETTINGS.md#differences-from-the-notebook))
 - **Filament "sticks" at every retraction** (`SPLIT_RETRACTIONS`). The notebook treats points between a 1 mm retract
   and the matching unretract as travel, and lifts travel 1 mm along the tool axis. So each unretract was written as a
   1 mm plunge while extruding 1 mm of filament, about 100× a normal segment, at F20000. With the 3mf's 1 mm
@@ -357,11 +371,11 @@ No model has poles. Squirtle's deformation takes about 85 s.
 - Dead code: `CSRPattern`, the old `deg:` parameter hack, `tools/test_fast_map.py`.
 
 ### Investigation
-- **The floating plastic over the pi's bridge** comes from the slicer, not the simulator. Cura's own planar toolpath
+- The floating plastic over the pi's bridge comes from the slicer, not the simulator: Cura's own planar toolpath
   already floats in the deformed shape.
-- **Sparse gyroid infill "floats" by nature:** a plain 30 mm cube shows 1.3% under a 1 mm-radius check. Bridges
-  anchored at both ends are normal.
-- **CuraEngine isn't deterministic.** Two slices of the same STL differ by about 0.01 mm on a few hundred lines, even
+- Sparse gyroid infill "floats" by nature: a plain 30 mm cube shows 1.3% under a 1 mm-radius check. Bridges anchored
+  at both ends are normal.
+- CuraEngine isn't deterministic: two slices of the same STL differ by about 0.01 mm on a few hundred lines, even
   single-threaded. Compare runs on the same planar G-code.
 
 ---
@@ -402,10 +416,10 @@ No model has poles. Squirtle's deformation takes about 85 s.
 | end to end, same run | 858 s | 131 s |
 
 ### Investigation
-- **The notebook's deformation solve is quartic and unconverged,** and chaotic: nudging the start point by 1e-9 mm moves
-  vertices by up to 0.6 mm. So it can only be reproduced bit-for-bit, and a GPU port couldn't match it within a small
-  tolerance. It was sped up on the CPU instead.
-- **The rotation smoothing is also quartic** (`W·Δ²` residuals). Left unchanged, and still unchanged today.
-- **`INITIAL_ROTATION_FIELD_SMOOTHING = 30` does one pass:** each of the 30 recomputes from the same unsmoothed field.
-- **The old GUI-sliced benchy used absolute extrusion (M82).** The mapper treats E as relative, so that output had
+- The notebook's deformation solve is quartic, unconverged and chaotic: nudging the start point by 1e-9 mm moves
+  vertices by up to 0.6 mm. It can only be reproduced bit-for-bit (a GPU port couldn't match it), so it was sped up
+  on the CPU instead.
+- The rotation smoothing is also quartic (`W·Δ²` residuals). Left unchanged.
+- `INITIAL_ROTATION_FIELD_SMOOTHING = 30` does one pass: each of the 30 recomputes from the same unsmoothed field.
+- The old GUI-sliced benchy used absolute extrusion (M82). The mapper treats E as relative, so that output had
   per-segment values like `E1794`.
