@@ -54,6 +54,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     planar_path = sliced_gcode or os.path.join(work_dir, f"{name}_deformed_tet.gcode")
     t0 = time.perf_counter()
     from . import support_check as sc  # heavy imports (open3d, pyvista): only when a run starts
+    from . import quality
 
     with TIMER(f"TOTAL ({impl})"):
         # ---- 1. deform
@@ -128,7 +129,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
                                    seg_size=mp["SEG_SIZE"])
             stats["floating_points"] = support["floating_points"]
             log(sc.format_report(support))
-    poles = sc.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"], retraction=retraction)
+    poles = quality.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"], retraction=retraction)
     stats["poles"] = len(poles[0])
     if support_check:
         stats["ungrounded_mm"] = round(support["ungrounded_mm"], 1)
@@ -160,7 +161,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     header = sim_header.build(name, shown, stats, planar_path, info, _fd.LAST_DEFORM_INFO,
                               sliced_by_cura_here=sliced_gcode is None)
     sim_header.prepend(out_gcode, header)
-    log(sc.format_vertical(poles, line_offset=len(header)))  # line numbers in the final file
+    log(quality.format_vertical(poles, line_offset=len(header)))  # line numbers in the final file
     total = time.perf_counter() - t0
     log(f"[map] {stats}")
     log(f"[done] {out_gcode}  ({total:.1f} s)")

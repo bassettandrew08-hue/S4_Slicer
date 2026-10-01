@@ -1,5 +1,6 @@
 """
 Print-order support check: find extrusion that would be laid down in mid-air.
+(The poles / along-the-nozzle-axis check of the final 4-axis G-code is in s4/quality.py.)
 
 Works on the real-space toolpath (planar G-code mapped back through the deformation, exactly as the
 mapper does it), in print order, one planar layer at a time. A point is "floating" if nothing printed in
@@ -15,7 +16,6 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 
 from . import fast_map, meshio_s4
-from .geometry import nozzle_tip
 
 _WORD = re.compile(r"([A-Za-z])\s*(-?(?:\d+\.?\d*|\.\d+))")
 
@@ -83,7 +83,8 @@ def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), ra
 
 
 def check_planar(planar_path, radius=1.0, seg_size=0.6, retraction_length=1.0):
-    """Same check on Cura's planar toolpath in the deformed shape (no mapping). Islands are born here."""
+    """Debugging helper, not called by the pipeline: the same check on Cura's planar toolpath in the deformed shape
+    (no mapping back), to see whether an island is born in the deformation or in the mapping."""
     g = fast_map.read_gcode_points(planar_path, seg_size)
     layer, types = _planar_layers(planar_path, seg_size)
     ext = np.array([e is not None and e > 0 and abs(e) != retraction_length for e in g["extrusion"]])
@@ -242,52 +243,3 @@ def _format_local(r):
         s += f"\n[support]   {r['outside_part_points']} points map >0.5 mm outside the model"
     return s
 
-
-def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0, retraction=1.0):
-    """Suspicious extruding moves (longer than min_dz) in the final 4-axis G-code. Returns (poles, along_axis):
-    poles start right after a travel and drop straight down more than pole_dz (extrusion dragged down from a lifted
-    travel point: these print as free-standing sticks); along_axis ones run mostly along the nozzle's own axis
-    (pushing into or pulling out of the bead). A vertical move with the nozzle tilted sideways is normal S4 printing
-    and isn't flagged."""
-    word = re.compile(r"([CXZBE])(-?\d+(?:\.\d*)?|-?\.\d+)")
-    rows = []
-    with open(gcode_path) as fh:
-        for n, line in enumerate(fh, 1):
-            if not line.startswith(("G0", "G1")):
-                continue
-            w = dict(word.findall(line))
-            if "X" in w:
-                rows.append((n, float(w["C"]), float(w["X"]), float(w["Z"]), float(w["B"]), float(w.get("E", "nan"))))
-    if len(rows) < 2:
-        return [], []
-    a = np.array(rows)
-    b = np.radians(a[:, 4]); th = np.radians(a[:, 1])
-    x, y, z = nozzle_tip(a[:, 1], a[:, 2], a[:, 3], a[:, 4], nozzle_offset)
-    P = np.c_[x, y, z]
-    d = np.diff(P, axis=0)
-    dz = np.abs(d[:, 2]); dxy = np.hypot(d[:, 0], d[:, 1])
-    E = a[:, 5]
-    printing = (np.nan_to_num(E) > 0) & ~np.isclose(E, retraction)  # an unretract is not printing
-    n = np.linalg.norm(d, axis=1)
-    bb, tt = b[1:], th[1:]  # nozzle axis at the segment end: radial -sin B, vertical cos B
-    axis = np.c_[-np.sin(bb) * np.cos(tt), -np.sin(bb) * np.sin(tt), np.cos(bb)]
-    along = np.abs(np.sum(d * axis, axis=1)) > 0.894 * n  # within ~27 deg of the nozzle axis
-    vertical = (dz > min_dz) & (dxy < 0.5 * dz)
-    poles, steep = [], []
-    for k in np.nonzero(printing[1:] & (n > min_dz) & (vertical | along))[0]:
-        item = (int(a[k + 1, 0]), float(P[k, 2]), float(P[k + 1, 2]), [round(float(v), 1) for v in P[k + 1, :2]])
-        if vertical[k] and not printing[k] and dz[k] > pole_dz:
-            poles.append(item)
-        elif along[k]:
-            steep.append(item)
-    return poles, steep
-
-
-def format_vertical(result, line_offset=0):
-    poles, steep = result
-    s = f"[quality] poles (extruding >2 mm straight down from a travel): {len(poles) or 'none'}"
-    for line, z0, z1, xy in poles[:3]:
-        s += f"\n[quality]   G-code line {line + line_offset}: z {z0:.1f} -> {z1:.1f} at {xy}"
-    if steep:
-        s += f"\n[quality] extruding along the nozzle axis (>1 mm; pushing into or pulling out of the bead): {len(steep)}"
-    return s
