@@ -129,7 +129,8 @@ def read_gcode_points(path, SEG_SIZE):
     return {"position": P, "command": commands, "extrusion": extrusions, "inv_time_feed": inv_feeds, "feed": feeds}
 
 
-def cell_rotations_and_squish(input_cells, input_points, input_centers, def_points, def_centers, MAX_ROTATION, MIN_ROTATION):
+def cell_rotations_and_squish(input_cells, input_points, input_centers, def_points, def_centers, MAX_ROTATION,
+                              MIN_ROTATION):
     """Vectorised per-cell 2D Kabsch rotation, per-vertex averaged rotation, and z-squish scale."""
     n_cells = input_cells.shape[0]
     new_v = def_points[input_cells] - def_centers[:, None, :]
@@ -358,7 +359,8 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
         prev_travelling = travelling
         prev_command = move_command if SAFE else command
 
-        if command == "G01" and extrusion is not None and extrusion > 0 and (highest_printed_point != 0 or new_position[2] < 1):
+        if (command == "G01" and extrusion is not None and extrusion > 0
+                and (highest_printed_point != 0 or new_position[2] < 1)):
             highest_printed_point = max(highest_printed_point, new_position[2])
 
     return {"position": o_pos, "rotation": o_rot, "command": o_cmd, "extrusion": o_ext,

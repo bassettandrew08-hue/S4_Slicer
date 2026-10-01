@@ -1,5 +1,6 @@
 """
-Parity check: the pipeline's print-time estimate (s4/print_time.py) must equal R-Theta Sim's (sim/r-theta-simulator.html).
+Parity check: the pipeline's print-time estimate (s4/print_time.py) must equal R-Theta Sim's
+(sim/r-theta-simulator.html).
 
     venv\\Scripts\\python tools\\check_print_time.py
 

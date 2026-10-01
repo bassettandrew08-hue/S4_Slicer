@@ -84,7 +84,8 @@ def compute_neighbours(cells, n_points):
     face_inv, face_groups = _group_cells_by_key(face_keys)
 
     result = {}
-    for kind, inv, groups in (("point", point_inv, point_groups), ("edge", edge_inv, edge_groups), ("face", face_inv, face_groups)):
+    for kind, inv, groups in (("point", point_inv, point_groups), ("edge", edge_inv, edge_groups),
+                              ("face", face_inv, face_groups)):
         inv_l = inv.tolist()
         pairs = []
         for c in range(n_cells):
@@ -321,7 +322,8 @@ def path_length_to_base_gradient(ctx, tet, MAX_OVERHANG, INITIAL_ROTATION_FIELD_
 
 def initial_rotation_field(ctx, tet, p):
     irf = np.abs(np.deg2rad(90 + p["MAX_OVERHANG"]) - tet.cell_data['overhang_angle'])
-    grad = path_length_to_base_gradient(ctx, tet, p["MAX_OVERHANG"], p["INITIAL_ROTATION_FIELD_SMOOTHING"], p["SET_INITIAL_ROTATION_TO_ZERO"])
+    grad = path_length_to_base_gradient(ctx, tet, p["MAX_OVERHANG"], p["INITIAL_ROTATION_FIELD_SMOOTHING"],
+                                        p["SET_INITIAL_ROTATION_TO_ZERO"])
     if p["STEEP_OVERHANG_COMPENSATION"]:
         ia = tet.cell_data["in_air"]
         irf[ia] += 2 * (np.deg2rad(180) - tet.cell_data['overhang_angle'][ia])
@@ -433,8 +435,8 @@ def deformation_step(tet, rf, p, last=True, verbose=0, log=print):
         return calculate_deformation(tet, rf, p["DEFORMATION_ITERATIONS"], verbose)
     if method == "island_free":
         from . import island_free
-        nv, LAST_DEFORM_INFO = island_free.deform(tet.points, tet.field_data["cells"], np.asarray(tet.cell_data["cell_center"]),
-                                   rf, p, lift=last, log=log)
+        nv, LAST_DEFORM_INFO = island_free.deform(tet.points, tet.field_data["cells"],
+                                                  np.asarray(tet.cell_data["cell_center"]), rf, p, lift=last, log=log)
         return nv
     raise ValueError(f"unknown DEFORMATION_METHOD {method!r} (use 'island_free' or 'notebook')")
 

@@ -105,7 +105,8 @@ def _fmt_param(k, v):
 def git_version():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
-        r = subprocess.run(["git", "describe", "--always", "--dirty"], cwd=here, capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["git", "describe", "--always", "--dirty"], cwd=here, capture_output=True, text=True,
+                           timeout=5)
         return r.stdout.strip() or "unknown"
     except (OSError, subprocess.SubprocessError):
         return "unknown"

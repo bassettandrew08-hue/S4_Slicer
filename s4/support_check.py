@@ -124,7 +124,8 @@ def analyse(real, ext, layer, types, radius):
     def supported(i):
         return 0 <= i < len(P) and ext[i] and not floating[i]
     runs = np.split(fl, np.nonzero(np.diff(fl) > 1)[0] + 1) if len(fl) else []
-    classes = {"bridge": [0, 0.0, Counter(), 0.0], "cantilever": [0, 0.0, Counter(), 0.0], "island": [0, 0.0, Counter(), 0.0]}
+    # per class: [run count, length mm, ;TYPE: counts, walls/skin length mm]
+    classes = {k: [0, 0.0, Counter(), 0.0] for k in ("bridge", "cantilever", "island")}
     for r in runs:
         a, b = supported(r[0] - 1), supported(r[-1] + 1)
         k = "bridge" if a and b else ("cantilever" if a or b else "island")
@@ -168,11 +169,15 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     ei = np.nonzero(ext & (layer >= 0))[0]
     if len(ei) == 0:
         return 0.0, [], {"real_mm": 0.0, "wall_mm": 0.0}
-    Q = P[ei]; Ly = layer[ei]; n = len(ei)
+    Q = P[ei]
+    Ly = layer[ei]
+    n = len(ei)
     pairs = cKDTree(Q).query_pairs(R, output_type="ndarray")
     a, b = pairs[:, 0], pairs[:, 1]
-    fwd = Ly[a] > Ly[b]; bwd = Ly[b] > Ly[a]
-    A = csr_matrix((np.ones(int(fwd.sum() + bwd.sum()), np.int8), (np.r_[a[fwd], b[bwd]], np.r_[b[fwd], a[bwd]])), shape=(n, n))
+    fwd = Ly[a] > Ly[b]
+    bwd = Ly[b] > Ly[a]
+    A = csr_matrix((np.ones(int(fwd.sum() + bwd.sum()), np.int8), (np.r_[a[fwd], b[bwd]], np.r_[b[fwd], a[bwd]])),
+                   shape=(n, n))
     run_id = np.cumsum(np.r_[1, (np.diff(ei) != 1) | (np.diff(Ly) != 0)])
     seg = np.r_[0, np.linalg.norm(np.diff(Q, axis=0), axis=1)] * (np.r_[0, np.diff(run_id)] == 0)
     s_along = np.cumsum(seg)
@@ -185,7 +190,8 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
             continue
         direct = (Q[idx, 2] < R) | (np.asarray(A[idx] @ g.astype(np.int8)).ravel() > 0)
         gl = direct.copy()
-        rid = run_id[idx]; sa = s_along[idx]
+        rid = run_id[idx]
+        sa = s_along[idx]
         for r in np.unique(rid[direct]):
             m = rid == r
             dist = np.min(np.abs(sa[m][:, None] - sa[m & direct][None, :]), axis=1)
@@ -196,10 +202,11 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     # apart, so the old "count x seg_mm" understated the length)
     # at least seg_mm per point, so plastic piled into one spot (a blob: points with no path length) still counts
     point_len = 0.5 * (seg + np.r_[seg[1:], 0.0])
-    point_len[point_len < 0.02] = seg_mm  # plastic piled into one spot (a blob) still counts; real points are further apart
+    point_len[point_len < 0.02] = seg_mm  # real points are further apart than 0.02 mm
     typ = np.array([types[i] for i in ei], dtype=object)
     structural = np.isin(typ, STRUCTURAL)  # walls, skin: sparse infill floats a little even in flat prints
-    real_mm = float(point_len[ug].sum()); wall_mm = float(point_len[ug & structural].sum())
+    real_mm = float(point_len[ug].sum())
+    wall_mm = float(point_len[ug & structural].sum())
     keep = ug[a] & ug[b]
     C = csr_matrix((np.ones(int(keep.sum())), (a[keep], b[keep])), shape=(n, n))
     _, lab = connected_components(C, directed=False)

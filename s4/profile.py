@@ -76,8 +76,8 @@ CURA_DEFAULTS = dict(
     strip_start_prime=True,         # drop Cura's start-code prime (it would land inside the part)
 )
 NOTEBOOK_EXACT = {"deform": {"DEFORMATION_METHOD": "notebook"},
-                  "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False, "SAFE_TRAVEL_TRANSITIONS": False,
-                          "LIMIT_AXIS_SPEEDS": False,
+                  "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False,
+                          "SAFE_TRAVEL_TRANSITIONS": False, "LIMIT_AXIS_SPEEDS": False,
                           "EXTRUSION_MULTIPLIER_RANGE": None},
                   "cura": {"strip_start_prime": False}}
 DEG_KEYS = {"MAX_POS_ROTATION", "MAX_NEG_ROTATION", "ROTATION_MAX_DELTA"}
@@ -139,7 +139,8 @@ def merge(profile, overlay, where="profile"):
             clean = []
             for i, it in enumerate(its):
                 it = _normalise_deg({k: v for k, v in it.items() if not k.startswith("_")})
-                _check_keys("deform", it, [k for k in DEFAULT_PARAMS if k != "PART_OFFSET"], f"{where} iteration {i + 1}")
+                _check_keys("deform", it, [k for k in DEFAULT_PARAMS if k != "PART_OFFSET"],
+                            f"{where} iteration {i + 1}")
                 clean.append(it)
             p["deform"]["iterations"] = clean
     if "map" in overlay:
@@ -181,8 +182,8 @@ def apply_set(profile, assignment):
         elif bare in CURA_DEFAULTS:
             section = "cura"
         else:
-            raise ProfileError(f"--set: unknown setting {bare!r}{_suggest(bare, list(DEFAULT_PARAMS) + list(MAP_DEFAULTS))}"
-                               " (Cura settings go in --cura-set)")
+            hint = _suggest(bare, list(DEFAULT_PARAMS) + list(MAP_DEFAULTS))
+            raise ProfileError(f"--set: unknown setting {bare!r}{hint} (Cura settings go in --cura-set)")
     return merge(profile, {section: {bare: value}}, where="--set")
 
 
@@ -238,4 +239,5 @@ def to_json(p):
                     it[k + "_DEG"] = round(math.degrees(it.pop(k)), 6)
     text = json.dumps(out, indent=2)
     # keep short lists of numbers on one line ("PART_OFFSET": [0, 10, 0])
-    return re.sub(r"\[\s*([-\d.eE+,\s]+?)\s*\]", lambda m: "[" + ", ".join(x.strip() for x in m.group(1).split(",")) + "]", text)
+    return re.sub(r"\[\s*([-\d.eE+,\s]+?)\s*\]",
+                  lambda m: "[" + ", ".join(x.strip() for x in m.group(1).split(",")) + "]", text)

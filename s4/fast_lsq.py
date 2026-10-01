@@ -56,11 +56,13 @@ class FastJacobian:
             T = (self.t_indptr, self.t_indices, data[self.t_perm])
         else:  # lil_matrix never stores explicit zeros: drop them from the fixed layout
             nz = data != 0
-            indptr = np.concatenate([[0], np.cumsum(np.bincount(self.sorted_rows[nz], minlength=self.shape[0]))]).astype(np.int32)
+            row_counts = np.bincount(self.sorted_rows[nz], minlength=self.shape[0])
+            indptr = np.concatenate([[0], np.cumsum(row_counts)]).astype(np.int32)
             J = csr_matrix((data[nz], self.indices[nz], indptr), shape=self.shape, copy=False)
             t_data = data[self.t_perm]
             t_nz = t_data != 0
-            t_indptr = np.concatenate([[0], np.cumsum(np.bincount(self.t_rows[t_nz], minlength=self.shape[1]))]).astype(np.int32)
+            t_row_counts = np.bincount(self.t_rows[t_nz], minlength=self.shape[1])
+            t_indptr = np.concatenate([[0], np.cumsum(t_row_counts)]).astype(np.int32)
             T = (t_indptr, self.t_indices[t_nz], t_data[t_nz])
         self.current = (J.data, J.indptr, J.indices, T)
         return J
@@ -80,7 +82,8 @@ class FastJacobian:
 
     def rmatvec(self, v):
         t_indptr, t_indices, t_data = self.current[3]
-        return csr_matvec(t_indptr, t_indices, t_data, np.ascontiguousarray(v, dtype=np.float64), np.empty(self.shape[1]))
+        return csr_matvec(t_indptr, t_indices, t_data, np.ascontiguousarray(v, dtype=np.float64),
+                          np.empty(self.shape[1]))
 
 
 @contextmanager

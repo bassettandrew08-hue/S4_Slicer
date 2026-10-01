@@ -5,8 +5,9 @@ vertical_extrusion finds poles and extrusion along the nozzle's own axis (the pi
 
 path_roughness, for comparing runs (tools/model_suite.py), is R-Theta Sim's "Path roughness" view in Python: the
 extruding moves are split into bead segments the way the sim does (by C every 3 deg and B every 6 deg, at most 32),
-and each segment gets the angle it turns from the segment it continues. A turn only counts when a neighbouring segment also turns sharply: a real corner of the part is
-one sharp turn between straight runs, while zig-zag skin and jittery mapping turn sharply again and again.
+and each segment gets the angle it turns from the segment it continues. A turn only counts when a neighbouring
+segment also turns sharply: a real corner of the part is one sharp turn between straight runs, while zig-zag skin
+and jittery mapping turn sharply again and again.
 """
 import re
 
@@ -108,5 +109,6 @@ def format_vertical(result, line_offset=0):
     for line, z0, z1, xy in poles[:3]:
         s += f"\n[quality]   G-code line {line + line_offset}: z {z0:.1f} -> {z1:.1f} at {xy}"
     if steep:
-        s += f"\n[quality] extruding along the nozzle axis (>1 mm; pushing into or pulling out of the bead): {len(steep)}"
+        s += ("\n[quality] extruding along the nozzle axis (>1 mm; pushing into or pulling out of the bead): "
+              f"{len(steep)}")
     return s

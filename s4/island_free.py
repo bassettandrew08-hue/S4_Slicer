@@ -72,7 +72,9 @@ def _J(V, c, Dm_inv, t, out):
     """out = Ds @ Dm_inv[t] for tet t with vertex ids c."""
     a0 = V[c[0]]
     for i in range(3):
-        e1 = V[c[1], i] - a0[i]; e2 = V[c[2], i] - a0[i]; e3 = V[c[3], i] - a0[i]
+        e1 = V[c[1], i] - a0[i]
+        e2 = V[c[2], i] - a0[i]
+        e3 = V[c[3], i] - a0[i]
         for j in range(3):
             out[i, j] = e1 * Dm_inv[t, 0, j] + e2 * Dm_inv[t, 1, j] + e3 * Dm_inv[t, 2, j]
 
@@ -84,13 +86,15 @@ def _tet_terms(V, cells, Dm_inv, vol, R, beta, guard, e_out, dDs_out):
     n = cells.shape[0]
     bad = np.zeros(n, np.bool_)
     for t in numba.prange(n):
-        J = np.empty((3, 3)); A = np.empty((3, 3))
+        J = np.empty((3, 3))
+        A = np.empty((3, 3))
         _J(V, cells[t], Dm_inv, t, J)
         if not guard[t]:
             ef = 0.0
             for i in range(3):
                 for j in range(3):
-                    df = J[i, j] - R[t, i, j]; ef += df * df
+                    df = J[i, j] - R[t, i, j]
+                    ef += df * df
             e_out[t] = vol[t] * ef
             for i in range(3):
                 for k in range(3):
@@ -104,15 +108,21 @@ def _tet_terms(V, cells, Dm_inv, vol, R, beta, guard, e_out, dDs_out):
             bad[t] = True
             continue
         _adj3(J, A)  # J^-1 = A / d
-        ef = 0.0; ej = 0.0; ei = 0.0
+        ef = 0.0
+        ej = 0.0
+        ei = 0.0
         for i in range(3):
             for j in range(3):
-                df = J[i, j] - R[t, i, j]; ef += df * df; ej += J[i, j] * J[i, j]
-                inv = A[i, j] / d; ei += inv * inv
+                df = J[i, j] - R[t, i, j]
+                ef += df * df
+                ej += J[i, j] * J[i, j]
+                inv = A[i, j] / d
+                ei += inv * inv
         e_out[t] = vol[t] * (ef + beta * (ej + ei - 6.0))
         # dJ = 2 (J - R) + beta (2 J - 2 J^-T J^-1 J^-T)
         # M = Ji^T Ji Ji^T with Ji = A / d
-        T1 = np.empty((3, 3)); M = np.empty((3, 3))
+        T1 = np.empty((3, 3))
+        M = np.empty((3, 3))
         for i in range(3):
             for j in range(3):
                 s = 0.0
@@ -161,12 +171,18 @@ def _max_step(V, D, cells, Dm_inv, guard, tcap, rho):
         if not guard[t]:
             out[t] = tcap
             continue
-        A = np.empty((3, 3)); B = np.empty((3, 3)); adjA = np.empty((3, 3)); adjB = np.empty((3, 3))
+        A = np.empty((3, 3))
+        B = np.empty((3, 3))
+        adjA = np.empty((3, 3))
+        adjB = np.empty((3, 3))
         _J(V, cells[t], Dm_inv, t, A)
         _J(D, cells[t], Dm_inv, t, B)
-        _adj3(A, adjA); _adj3(B, adjB)
-        c0 = _det3(A); c3 = _det3(B)
-        c1 = 0.0; c2 = 0.0
+        _adj3(A, adjA)
+        _adj3(B, adjB)
+        c0 = _det3(A)
+        c3 = _det3(B)
+        c1 = 0.0
+        c2 = 0.0
         for i in range(3):
             for j in range(3):
                 c1 += adjA[i, j] * B[j, i]
@@ -180,7 +196,8 @@ def _max_step(V, D, cells, Dm_inv, guard, tcap, rho):
             s = tcap * k / steps
             p = c0 + s * (c1 + s * (c2 + s * c3))
             if p <= floor:
-                lo = prev_s; hi = s
+                lo = prev_s
+                hi = s
                 for _ in range(40):
                     mid = 0.5 * (lo + hi)
                     pm = c0 + mid * (c1 + mid * (c2 + mid * c3))
@@ -223,7 +240,9 @@ class FitProblem:
         self.e = np.empty(len(self.cells))
         self.dDs = np.empty((len(self.cells), 3, 3))
         self.R = None
-        self.lift_idx = np.zeros(0, np.int64); self.lift_t = np.zeros(0); self.lift_w = np.zeros(0)
+        self.lift_idx = np.zeros(0, np.int64)
+        self.lift_t = np.zeros(0)
+        self.lift_w = np.zeros(0)
         self.lift_up = np.zeros(0, bool)
         # stiffness (Hessian of sum vol |J|^2 per coordinate, /2)
         Gi = self.Dm_inv  # rows of Dm^-1 are the basis-function gradients (J = Ds Dm^-1)
@@ -261,7 +280,9 @@ class FitProblem:
         return float(np.sum(self.lift_w * dz * dz))
 
     def max_step(self, x, d):
-        return float(_max_step(x.reshape(-1, 3), np.ascontiguousarray(d.reshape(-1, 3)), self.cells, self.Dm_inv, self.guard, 1.2, self.step_rho).min())
+        steps = _max_step(x.reshape(-1, 3), np.ascontiguousarray(d.reshape(-1, 3)), self.cells, self.Dm_inv,
+                          self.guard, 1.2, self.step_rho)
+        return float(steps.min())
 
     def preconditioner(self):
         scale = 2.0 * (1.0 + 2.0 * self.beta)
@@ -292,15 +313,20 @@ class FitProblem:
         S, Y = [], []
         it = 0
         for it in range(max_iter):
-            q = g.copy(); al = []
+            q = g.copy()
+            al = []
             for s, y in zip(reversed(S), reversed(Y)):
-                a = (s @ q) / (y @ s); al.append(a); q -= a * y
+                a = (s @ q) / (y @ s)
+                al.append(a)
+                q -= a * y
             q = H0(q)
             for (s, y), a in zip(zip(S, Y), reversed(al)):
-                b = (y @ q) / (y @ s); q += s * (a - b)
+                b = (y @ q) / (y @ s)
+                q += s * (a - b)
             d = -q
             if g @ d >= 0:
-                d = -H0(g); S, Y = [], []
+                d = -H0(g)
+                S, Y = [], []
             t = min(1.0, (1.0 if self.step_rho > 0 else 0.9) * self.max_step(x, d))
             for _ in range(40):
                 xn = x + t * d
@@ -310,11 +336,14 @@ class FitProblem:
                 t *= 0.5
             else:
                 break
-            s = xn - x; y = gn - g
+            s = xn - x
+            y = gn - g
             if y @ s > 1e-12:
-                S.append(s); Y.append(y)
+                S.append(s)
+                Y.append(y)
                 if len(S) > m:
-                    S.pop(0); Y.pop(0)
+                    S.pop(0)
+                    Y.pop(0)
             rel = (E - En) / max(abs(E), 1e-12)
             x, E, g = xn, En, gn
             if rel < tol and it > 5:
@@ -329,18 +358,24 @@ def vertex_graph(cells, n):
     e = np.unique(np.sort(e, axis=1), axis=0)
     nbrs = [[] for _ in range(n)]
     for a, b in e.tolist():
-        nbrs[a].append(b); nbrs[b].append(a)
+        nbrs[a].append(b)
+        nbrs[b].append(a)
     return nbrs
 
 
 def priority_flood(V, nbrs, slope, bed_tol, bed=None):
     """Lowest heights >= z so that every vertex is reachable from the bed by a path rising >= slope per mm. The bed
     is the given vertices (the pinned bed face) or else everything within bed_tol of the lowest point."""
-    z = V[:, 2]; n = len(z)
-    h = np.full(n, np.inf); done = np.zeros(n, bool); pq = []
+    z = V[:, 2]
+    n = len(z)
+    h = np.full(n, np.inf)
+    done = np.zeros(n, bool)
+    pq = []
     for v in (np.nonzero(z <= z.min() + bed_tol)[0] if bed is None else bed).tolist():
-        h[v] = z[v]; heapq.heappush(pq, (float(z[v]), v))
-    xy = V[:, :2].tolist(); zl = z.tolist()
+        h[v] = z[v]
+        heapq.heappush(pq, (float(z[v]), v))
+    xy = V[:, :2].tolist()
+    zl = z.tolist()
     while pq:
         hv, v = heapq.heappop(pq)
         if done[v]:
@@ -353,25 +388,32 @@ def priority_flood(V, nbrs, slope, bed_tol, bed=None):
             xu, yu = xy[u]
             cand = max(zl[u], hv + slope * ((xu - xv) ** 2 + (yu - yv) ** 2) ** 0.5)
             if cand < h[u]:
-                h[u] = cand; heapq.heappush(pq, (cand, u))
+                h[u] = cand
+                heapq.heappush(pq, (cand, u))
     return h
 
 
 def island_seeds(V, nbrs, bed_tol=1.0, min_persistence=0.2, bed=None):
     """Local height minima not connected to the bed, with how much height they float for (sublevel-set persistence).
     Returns [(birth vertex, birth z, merge z, vertices)]."""
-    z = V[:, 2]; n = len(z)
-    parent = list(range(n)); birth = z.copy(); size = np.ones(n, int)
+    z = V[:, 2]
+    n = len(z)
+    parent = list(range(n))
+    birth = z.copy()
+    size = np.ones(n, int)
     if bed is None:
         grounded = z <= z.min() + bed_tol
     else:
-        grounded = np.zeros(n, bool); grounded[bed] = True
+        grounded = np.zeros(n, bool)
+        grounded[bed] = True
 
     def find(x):
         while parent[x] != x:
-            parent[x] = parent[parent[x]]; x = parent[x]
+            parent[x] = parent[parent[x]]
+            x = parent[x]
         return x
-    active = np.zeros(n, bool); seeds = []
+    active = np.zeros(n, bool)
+    seeds = []
     for v in np.argsort(z, kind="stable").tolist():
         active[v] = True
         for u in nbrs[v]:
@@ -388,8 +430,10 @@ def island_seeds(V, nbrs, bed_tol=1.0, min_persistence=0.2, bed=None):
                 young, old = (rv, ru) if birth[rv] > birth[ru] else (ru, rv)
             if not grounded[young] and z[v] - birth[young] >= min_persistence:
                 seeds.append((int(young), float(birth[young]), float(z[v]), int(size[young])))
-            parent[young] = old; size[old] += size[young]
-            grounded[old] = grounded[old] or grounded[young]; birth[old] = min(birth[old], birth[young])
+            parent[young] = old
+            size[old] += size[young]
+            grounded[old] = grounded[old] or grounded[young]
+            birth[old] = min(birth[old], birth[young])
     return seeds
 
 
@@ -401,15 +445,17 @@ def _grounded(V, bed, tol=0.5):
 
 
 def _hold_targets(V, nbrs, pit, held, weight, falloff):
-    """Two-sided z springs (per-vertex weight) at V's height for the held vertices outside the pit, ramping (smoothstep) from 0 at
-    the pit to full weight at a path length of falloff mm through the mesh."""
-    keep = held.copy(); keep[pit] = False
+    """Two-sided z springs (per-vertex weight) at V's height for the held vertices outside the pit, ramping
+    (smoothstep) from 0 at the pit to full weight at a path length of falloff mm through the mesh."""
+    keep = held.copy()
+    keep[pit] = False
     idx = np.nonzero(keep)[0].astype(np.int64)
     w = weight[idx].copy()
     if falloff > 0 and len(pit):
         from scipy.sparse import csr_matrix
         from scipy.sparse.csgraph import dijkstra
-        a = np.repeat(np.arange(len(nbrs)), [len(x) for x in nbrs]); b = np.concatenate([np.asarray(x, np.int64) for x in nbrs])
+        a = np.repeat(np.arange(len(nbrs)), [len(x) for x in nbrs])
+        b = np.concatenate([np.asarray(x, np.int64) for x in nbrs])
         G = csr_matrix((np.linalg.norm(V[a] - V[b], axis=1) + 1e-9, (a, b)), shape=(len(nbrs), len(nbrs)))
         d = dijkstra(G, directed=False, indices=pit, min_only=True, limit=falloff)
         t = np.clip(d[idx] / falloff, 0.0, 1.0)
@@ -422,7 +468,8 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     q = {**DEFAULTS, **{k: p[k] for k in DEFAULTS if k in p}}
     t0 = time.perf_counter()
     P0 = np.asarray(points, dtype=np.float64)
-    V = P0.copy(); iters = 0
+    V = P0.copy()
+    iters = 0
     # the part's bed face: supported by the bed wherever the deformation puts it
     bed = np.nonzero(P0[:, 2] <= P0[:, 2].min() + float(q["BED_TOL"]))[0].astype(np.int64)
     pin = None
@@ -493,11 +540,14 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     U, _, Wt = np.linalg.svd(J)
     flip = np.linalg.det(U @ Wt) < 0
     U[flip, :, 2] *= -1
-    about_t = np.degrees(np.einsum("ij,ij->i", Rotation.from_matrix(U @ Wt).as_rotvec(), tangential_vectors(cell_centers)))
+    rotvec = Rotation.from_matrix(U @ Wt).as_rotvec()
+    about_t = np.degrees(np.einsum("ij,ij->i", rotvec, tangential_vectors(cell_centers)))
     want = np.degrees(rotation_field)
     sel = np.abs(want) > 20.0
     def _wmed(x, w):
-        o = np.argsort(x); cw = np.cumsum(w[o]); return float(x[o][np.searchsorted(cw, cw[-1] / 2)])
+        o = np.argsort(x)
+        cw = np.cumsum(w[o])
+        return float(x[o][np.searchsorted(cw, cw[-1] / 2)])
     # tilt that matters for the B axis: rotation about the tangential axis, volume-weighted, where >20 deg is wanted
     achieved = abs(_wmed(about_t[sel], prob.vol[sel])) if sel.any() else 0.0
     wanted = abs(_wmed(want[sel], prob.vol[sel])) if sel.any() else 0.0
@@ -510,8 +560,9 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     if log:
         log(f"[deform] island-free: {info}")
         if wanted > 5 and achieved < 0.7 * wanted:
-            log(f"[deform] WARNING: the deformation reached only {achieved:.0f} deg of the {wanted:.0f} deg tilt it aimed "
-                f"for (volume-weighted, where >20 deg is wanted). The nozzle will tilt too little; try FIT_METHOD \"penalty\".")
+            log(f"[deform] WARNING: the deformation reached only {achieved:.0f} deg of the {wanted:.0f} deg tilt it "
+                f"aimed for (volume-weighted, where >20 deg is wanted). The nozzle will tilt too little; "
+                f"try FIT_METHOD \"penalty\".")
     return V, info
 
 
@@ -523,7 +574,8 @@ def _tet_terms_penalty(V, cells, Dm_inv, vol, R, gamma, eps, e_out, dDs_out):
     are pushed back open by the penalty instead of being forbidden (so no step-size cap is needed)."""
     n = cells.shape[0]
     for t in numba.prange(n):
-        J = np.empty((3, 3)); A = np.empty((3, 3))
+        J = np.empty((3, 3))
+        A = np.empty((3, 3))
         _J(V, cells[t], Dm_inv, t, J)
         d = _det3(J)
         _adj3(J, A)               # adj(J); d det / dJ = adj(J)^T
@@ -531,7 +583,8 @@ def _tet_terms_penalty(V, cells, Dm_inv, vol, R, gamma, eps, e_out, dDs_out):
         ef = 0.0
         for i in range(3):
             for j in range(3):
-                df = J[i, j] - R[t, i, j]; ef += df * df
+                df = J[i, j] - R[t, i, j]
+                ef += df * df
         pen = viol * viol if viol > 0.0 else 0.0
         e_out[t] = vol[t] * (ef + gamma * pen)
         G = np.empty((3, 3))
@@ -554,7 +607,8 @@ class PenaltyProblem(FitProblem):
 
     def __init__(self, P0, cells, gamma=100.0, eps=0.2, precond_floor=0.2):
         super().__init__(P0, cells, 0.0, precond_floor=precond_floor)
-        self.gamma = float(gamma); self.eps = float(eps)
+        self.gamma = float(gamma)
+        self.eps = float(eps)
 
     def energy_grad(self, x):
         V = x.reshape(-1, 3)
@@ -582,7 +636,9 @@ class PenaltyProblem(FitProblem):
         cols = [lu.solve(b[:, k] + 1e-9 * self.P0[:, k]) for k in range(3)]
         if pin is not None:
             idx, t, w = pin
-            wz = np.zeros(self.n); bz = b[:, 2] + 1e-9 * self.P0[:, 2]
-            np.add.at(wz, idx, w); np.add.at(bz, idx, w * t)
+            wz = np.zeros(self.n)
+            bz = b[:, 2] + 1e-9 * self.P0[:, 2]
+            np.add.at(wz, idx, w)
+            np.add.at(bz, idx, w * t)
             cols[2] = splu((K + diags(wz + reg)).tocsc()).solve(bz)
         return np.column_stack(cols)

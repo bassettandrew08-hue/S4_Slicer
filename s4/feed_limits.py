@@ -56,7 +56,8 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
                 if "F" in w and any(new[k] != pos[k] for k in pos):
                     t = _move_time(pos, new, None, float(w["F"]), lim, nozzle_offset)
                     out.append(re.sub(r" F-?[\d.eE+-]+", " F" + _fmt_f(1.0 / t), lines[i + 1].rstrip()))
-                    pos = new; moves += 1
+                    pos = new
+                    moves += 1
                     mode = 93  # the triple's closing G93 is consumed here
                     i += 3
                     continue
@@ -66,7 +67,8 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
             if not started:  # "G0 C0 X0 Z20 B0 ; go to start"
                 started = True
                 pos = new
-                out.append(line); i += 1
+                out.append(line)
+                i += 1
                 continue
             if mode == 93 and "F" in w and any(new[k] != pos[k] for k in pos):
                 t0 = 1.0 / float(w["F"])

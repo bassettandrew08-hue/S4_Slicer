@@ -87,12 +87,14 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
         if sliced_gcode is None:
             with TIMER("2. slice (CuraEngine)"):
                 from .cura import slice_stl
-                cura_info = slice_stl(stl_path, planar_path, profiles.cura_config_path(prof), overrides, cura_engine, log=log)
+                cura_info = slice_stl(stl_path, planar_path, profiles.cura_config_path(prof), overrides, cura_engine,
+                                      log=log)
         else:
             log(f"[slice] using existing planar G-code {sliced_gcode}")
         retraction = 1.0
         if cura_info:
-            retraction = float(cura_info["extruder"].get("retraction_amount", cura_info["global"].get("retraction_amount")))
+            retraction = float(cura_info["extruder"].get("retraction_amount",
+                                                         cura_info["global"].get("retraction_amount")))
         else:  # sliced elsewhere: the mapper must know the file's retraction to recognise retract/unretract moves
             retraction = planar_retraction(planar_path, default=retraction)
             log(f"[slice] retraction length in that file: {retraction:g} mm")
