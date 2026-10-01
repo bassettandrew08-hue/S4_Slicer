@@ -33,6 +33,8 @@ DEFAULT_PARAMS = dict(
     LIFT_HOLD=0.0,                 # island_free: > 0 holds never-in-a-pit vertices at their fit height (x LIFT_WEIGHT)
     LIFT_HOLD_FALLOFF=0.0,         # island_free: mm over which that hold ramps up with distance from the pit
     LIFT_HOLD_VOLUME_WEIGHTED=False,  # island_free: hold x min(1, vertex volume share / median)
+    LIFT_PRECOND_FLOOR=-1.0,       # island_free: PRECOND_FLOOR for the lifting solves only (< 0 = the fit's)
+    LIFT_STIFFNESS_FLOOR=0.0,      # island_free: lift z terms x min(1, vertex fit stiffness / (this x median))
     BARRIER_WEIGHT=0.02,
     FLIP_FREE_STAGES=10,
     FLIP_FREE_STAGE_ITERATIONS=150,

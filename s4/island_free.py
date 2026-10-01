@@ -41,6 +41,12 @@ DEFAULTS = dict(
                                  # two-sided spring (weight x LIFT_WEIGHT), so a pit's rim cannot be dragged up
     LIFT_HOLD_FALLOFF=0.0,       # mm (path length through the mesh): the hold ramps from 0 at the pit to full here
     LIFT_HOLD_VOLUME_WEIGHTED=False,  # scale the hold by min(1, the vertex's volume share / median)
+    LIFT_PRECOND_FLOOR=-1.0,     # PRECOND_FLOOR for the lifting solves only (< 0: same as the fit's). Lift
+                                 # springs pull the whole mesh; without a floor the preconditioned step is huge at
+                                 # vertices held only by micro-tets, and a dense micro-tet cluster gets torn apart
+    LIFT_STIFFNESS_FLOOR=0.0,    # > 0: scale every lift-phase z term (targets, anchor, hold) of a vertex by
+                                 # min(1, its fit stiffness / (this x the median)), so springs never overpower the
+                                 # weakly attached vertices of dense micro-tet clusters (which they tear apart)
     BARRIER_WEIGHT=0.02,         # beta
     FLIP_FREE_STAGES=10,
     FLIP_FREE_STAGE_ITERATIONS=150,
@@ -250,8 +256,12 @@ class FitProblem:
         # blows up there (then the fold-free cap shrinks every step to ~nothing). Floor each vertex's stiffness.
         self.K_raw = K
         dK = K.diagonal()
+        self.set_precond_floor(precond_floor)
+
+    def set_precond_floor(self, precond_floor):
+        dK = self.K_raw.diagonal()
         floor = precond_floor * np.median(dK)
-        self.K = (K + diags(np.maximum(floor - dK, 0.0) + 1e-8 * np.median(dK))).tocsc()
+        self.K = (self.K_raw + diags(np.maximum(floor - dK, 0.0) + 1e-8 * np.median(dK))).tocsc()
 
     def energy_grad(self, x):
         V = x.reshape(-1, 3)
@@ -470,13 +480,21 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
         vv /= np.median(vv)
         if q["LIFT_VOLUME_WEIGHTED"]:
             w *= vv
+        soft = np.ones(len(P0))
+        if float(q["LIFT_STIFFNESS_FLOOR"]) > 0:
+            dK = prob.K_raw.diagonal()
+            soft = np.minimum(1.0, dK / (float(q["LIFT_STIFFNESS_FLOOR"]) * np.median(dK)))
+            w *= soft
         anchor = None
         if float(q["LIFT_ANCHOR"]) > 0:
             g0 = _grounded(V, bed)
             anchor = (g0, V[g0, 2].copy(), float(q["LIFT_ANCHOR"]) * w[g0], np.zeros(len(g0), bool))
+        if float(q["LIFT_PRECOND_FLOOR"]) >= 0 and float(q["LIFT_PRECOND_FLOOR"]) != float(q["PRECOND_FLOOR"]):
+            prob.set_precond_floor(float(q["LIFT_PRECOND_FLOOR"]))
         hold_w = np.full(len(P0), float(q["LIFT_HOLD"]) * float(q["LIFT_WEIGHT"]))
         if q["LIFT_HOLD_VOLUME_WEIGHTED"]:
             hold_w *= np.minimum(vv, 1.0)  # weaker where tiny tets give a vertex little fit stiffness
+        hold_w *= soft
         V_fit = V.copy()
         held = np.ones(len(P0), bool)
         if anchor is not None:
