@@ -7,9 +7,11 @@ swings X/Z by ~0.7 mm through the nozzle offset, a small move near the centre ca
 lifted over the part is much longer in real space than in the planar file. Those moves asked for thousands of deg/s
 on C and B.
 
-Each move's time becomes the longest of: the planned time, the tip distance at the move's feed, and each axis' travel
-at its speed limit. Moves are only ever slowed down, never sped up. The G94 "F20000" moves (travel down to a re-entry
-point) become G93 moves too, so every motion has a definite time.
+Each G93 move's time becomes the longer of its planned time and each axis' travel at its speed limit: moves are only
+slowed down, never sped up. (The planned time already keeps the tip at Cura's speed in planar space; a stretch of
+the deformation can still make the real tip faster, which nothing here limits.) G94 moves that move (the "F20000"
+travel down to a re-entry point, and the first retract of a print) become G93 moves timed by their mm/min feed and
+the axis limits, so every motion has a definite time.
 """
 import re
 
@@ -43,15 +45,16 @@ def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
             mode = 93
         elif code == "G94":
             mode = 94
-            # a G94 / move F20000 / G93 triple (the writer's feedless move): make it a G93 move if it moves
-            if i + 2 < n and lines[i + 2].strip() == "G93" and started and lines[i + 1].startswith(("G00 C", "G01 C")) \
-                    and lines[i + 1].rstrip().endswith(" F20000"):
-                w = dict(_WORD.findall(lines[i + 1]))
+            # a G94 / move F<mm/min> / G93 triple: the writer's feedless move (F20000), or a retract emitted at a new
+            # position (the first retract of a print swings C to the first point). If it moves, make it a G93 move
+            # timed by its feed and the axis limits; E-only triples (retract in place) stay as they are.
+            if i + 2 < n and lines[i + 2].strip() == "G93" and started and lines[i + 1].startswith(("G00 C", "G01 C")):
+                w = dict(_WORD.findall(lines[i + 1].split(";", 1)[0]))
                 new = {k: float(w[k]) for k in pos}
-                if any(new[k] != pos[k] for k in pos):
-                    t = _move_time(pos, new, None, 20000.0, lim, nozzle_offset)
-                    out.append(lines[i + 1].rstrip()[:-len(" F20000")] + " F" + _fmt_f(1.0 / t))
-                    pos = new; moves += 1; slowed += 1
+                if "F" in w and any(new[k] != pos[k] for k in pos):
+                    t = _move_time(pos, new, None, float(w["F"]), lim, nozzle_offset)
+                    out.append(re.sub(r" F-?[\d.eE+-]+", " F" + _fmt_f(1.0 / t), lines[i + 1].rstrip()))
+                    pos = new; moves += 1
                     mode = 93  # the triple's closing G93 is consumed here
                     i += 3
                     continue

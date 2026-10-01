@@ -6,6 +6,34 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md). Measurements are on the `benchy
 
 ---
 
+## 2026-10-01: Bug fixes, cleanup, path-roughness view
+
+### Added
+- **Sim: "Path roughness" colour mode.** Each bead is coloured by how sharply the path turns at it. A turn only counts
+  when a neighbouring segment also turns sharply, so a part's real corners stay neutral and zig-zag patches light up
+  (e.g. a rough bridge underside).
+
+### Fixed
+- **The first retract of every print swung C up to 179° with no speed limit.** It was written as a G94 move at the
+  first point's position, which the speed limiter skipped. The limiter now turns every G94 line that moves into a
+  timed G93 move, using its feed and the axis limits.
+- **`--sliced-gcode` assumed a 1 mm retraction.** The mapper only recognises retract/unretract moves of exactly the
+  retraction length. It's now read from the planar file (its most common E-only retract).
+- **Pole and along-axis checks** used a hard-coded 1 mm unretract. They now use the run's retraction length.
+- **`--sliced-gcode` runs** now write `; s4: planar_gcode = ...` into the settings block, as documented.
+- **A `null` speed or acceleration in a profile** crashed the run at the end. It now skips the estimate with a
+  message.
+- **`moves_slowed_pct`** no longer counts moves converted from G94 as slowed.
+- **`tools/compare_gcode.py`** silently ignored `--tol-f-rel` values below 1e-4.
+- **Sim:** opening a file with no moves left the previous print on screen while the sim already pointed at the new
+  file. The tip-speed readout also measured across pauses and file changes.
+
+### Changed
+- **Code cleanup, no change in output:** unused imports, arguments and constants removed, inline imports hoisted,
+  stale docstrings fixed.
+
+---
+
 ## 2026-09-28: R-Theta Sim in the repo, print times in sync
 
 ### Added

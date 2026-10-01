@@ -10,6 +10,20 @@ from .timing import TIMER
 from . import profile as profiles
 
 
+def planar_retraction(planar_path, default=1.0):
+    """Retraction length of a planar G-code: the most common E of its E-only retract lines (Cura: `G1 F.. E-1`)."""
+    import collections
+    import re
+    pat = re.compile(r"^G1\s+(?:F[\d.]+\s+)?E-([\d.]+)\s*(?:;.*)?$")
+    counts = collections.Counter()
+    with open(planar_path, errors="replace") as fh:
+        for line in fh:
+            m = pat.match(line)
+            if m:
+                counts[float(m.group(1))] += 1
+    return counts.most_common(1)[0][0] if counts else default
+
+
 def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_engine=None, sliced_gcode=None,
         save_gif=False, save_pickle=False, support_check=True, params=None, log=print):
     """
@@ -78,6 +92,9 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
         retraction = 1.0
         if cura_info:
             retraction = float(cura_info["extruder"].get("retraction_amount", cura_info["global"].get("retraction_amount")))
+        else:  # sliced elsewhere: the mapper must know the file's retraction to recognise retract/unretract moves
+            retraction = planar_retraction(planar_path, default=retraction)
+            log(f"[slice] retraction length in that file: {retraction:g} mm")
 
         # ---- 3. map back to 4 axes
         with TIMER("3. map to 4-axis G-code"):
@@ -111,7 +128,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
                                    seg_size=mp["SEG_SIZE"])
             stats["floating_points"] = support["floating_points"]
             log(sc.format_report(support))
-    poles = sc.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"])
+    poles = sc.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"], retraction=retraction)
     stats["poles"] = len(poles[0])
     if support_check:
         stats["ungrounded_mm"] = round(support["ungrounded_mm"], 1)
@@ -120,7 +137,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     with TIMER("print-time estimate"):
         try:
             stats["estimated_print_time_min"] = round(print_time.estimate(out_gcode, mp) / 60, 1)
-        except ValueError as e:
+        except (ValueError, TypeError) as e:  # a machine limit set to 0 or null in the profile
             log(f"[print-time] no estimate: {e}")
 
     # settings comments for the R-Theta simulator, at the top of the final G-code
@@ -135,7 +152,8 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
         except Exception:
             info = None
     shown = dict(prof); shown["map"] = dict(prof["map"], RETRACTION_LENGTH=retraction)  # the value actually used
-    header = sim_header.build(name, shown, stats, planar_path, info, _fd.LAST_DEFORM_INFO)
+    header = sim_header.build(name, shown, stats, planar_path, info, _fd.LAST_DEFORM_INFO,
+                              sliced_by_cura_here=sliced_gcode is None)
     sim_header.prepend(out_gcode, header)
     log(sc.format_vertical(poles, line_offset=len(header)))  # line numbers in the final file
     total = time.perf_counter() - t0

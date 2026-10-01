@@ -207,7 +207,7 @@ details.inner > summary::after { order: -1; margin: 0 2px 0 0; }
       <label class="tog">Printed plastic <input type="checkbox" id="showbeads" checked></label>
       <label class="tog">Upcoming path <input type="checkbox" id="showpreview" checked></label>
       <div class="field"><label for="colormode">Color by</label>
-        <select id="colormode"><option value="tilt">Nozzle tilt (B)</option><option value="flow">Plastic per mm</option><option value="support">Support check</option><option value="height">Height</option><option value="solid">Filament</option></select>
+        <select id="colormode"><option value="tilt">Nozzle tilt (B)</option><option value="flow">Plastic per mm</option><option value="support">Support check</option><option value="height">Height</option><option value="rough">Path roughness</option><option value="solid">Filament</option></select>
       </div>
       <p class="faint">Click plastic to see its G-code line. Drag to orbit, right-drag to pan, scroll to zoom.</p>
     </div>
@@ -720,6 +720,29 @@ function buildBeadSegments(S, P) {
   Object.assign(P, { beadStart: start, beadTotal: total, seg, segB, segN, segArea, segPrime, flowMedian, filArea });
 }
 
+// Path roughness: angle (deg) between each bead segment and the one it continues (0 where the path starts or jumps),
+// kept only where a neighbouring segment also turns sharply. A part's real corner is one sharp turn between straight
+// runs and reads 0; zig-zag skin and jittery mapping turn sharply again and again and stay lit.
+function segTurnAngles(P) {
+  if (P.segTurn) return P.segTurn;
+  const raw = segRawTurns(P), n = raw.length, out = new Float32Array(n);
+  for (let s = 0; s < n; s++) out[s] = Math.min(raw[s], Math.max(s > 0 ? raw[s - 1] : 0, s + 1 < n ? raw[s + 1] : 0));
+  return (P.segTurn = out);
+}
+function segRawTurns(P) {
+  const n = P.beadTotal, seg = P.seg, out = new Float32Array(n);
+  for (let s = 1; s < n; s++) {
+    const o = s * 6, q = o - 6;
+    if (Math.hypot(seg[o] - seg[q + 3], seg[o + 1] - seg[q + 4], seg[o + 2] - seg[q + 5]) > 0.05) continue; // not contiguous
+    const ax = seg[q + 3] - seg[q], ay = seg[q + 4] - seg[q + 1], az = seg[q + 5] - seg[q + 2];
+    const bx = seg[o + 3] - seg[o], by = seg[o + 4] - seg[o + 1], bz = seg[o + 5] - seg[o + 2];
+    const la = Math.hypot(ax, ay, az), lb = Math.hypot(bx, by, bz);
+    if (la < 1e-6 || lb < 1e-6) continue;
+    out[s] = Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by + az * bz) / (la * lb)))) * 180 / Math.PI;
+  }
+  return out;
+}
+
 // ---------- Preflight checks ----------
 async function preflight(S, P, onProgress) {
   const issues = [];
@@ -1196,12 +1219,14 @@ const PAL = {
   height: ['#1f6f86', '#8fd3c1', '#f4e27a'],
   flow: ['#3f8cff', '#dfe3e8', '#ff5d5d'],
   solid: '#e9e4d8',
+  rough: ['#cfd6de', '#ffc04d', '#ff3d3d'],
   support: ['#8e9aa7', '#b98bff', '#9b6bff', '#ff4f9a', '#ff9a3c', '#e9dfaa', '#e9dfaa'],
 };
 const cTilt = PAL.tilt.map(x => new THREE.Color(x));
 const cHeight = PAL.height.map(x => new THREE.Color(x));
 const cFlow = PAL.flow.map(x => new THREE.Color(x));
 const cSolid = new THREE.Color(PAL.solid);
+const cRough = PAL.rough.map(x => new THREE.Color(x)), ROUGH_MAX = 60; // degrees of turn shown at full red
 const cPrime = new THREE.Color('#5b6673');
 const SUPCOL = PAL.support.map(x => new THREE.Color(x));
 const lerp3 = (out, c, t) => t < 0.5 ? out.copy(c[0]).lerp(c[1], t * 2) : out.copy(c[1]).lerp(c[2], (t - 0.5) * 2);
@@ -1210,6 +1235,7 @@ function colorBeads() {
   if (!beadMesh) return;
   const col = new THREE.Color(), n = P.beadTotal, med = P.flowMedian || 1;
   beadYmax = 1; for (let s = 0; s < n; s++) beadYmax = Math.max(beadYmax, P.seg[s * 6 + 4]);
+  const turn = view.color === 'rough' ? segTurnAngles(P) : null;
   for (let s = 0; s < n; s++) {
     if (view.color === 'tilt') {
       const B = P.segB[s];
@@ -1217,6 +1243,7 @@ function colorBeads() {
       else col.copy(cTilt[1]).lerp(cTilt[2], Math.min(1, B / (S.bMax || 1)));
     } else if (view.color === 'support') col.copy(lastSupport ? SUPCOL[lastSupport.status[s]] : SUPCOL[0]);
     else if (view.color === 'height') lerp3(col, cHeight, Math.min(1, Math.max(0, P.seg[s * 6 + 4] / beadYmax)));
+    else if (view.color === 'rough') lerp3(col, cRough, Math.min(1, turn[s] / ROUGH_MAX));
     else if (view.color === 'flow' && P.segPrime[s]) col.copy(cPrime);
     else if (view.color === 'flow') {
       const r = P.segArea[s] / med;
@@ -1234,6 +1261,7 @@ function updateLegend() {
   const grad = (cols, labels) => `<div class="lg-bar" style="background:linear-gradient(90deg,${cols.join(',')})"></div><div class="lg-lab">${labels.map(l => `<span>${l}</span>`).join('')}</div>`;
   let html = '';
   if (view.color === 'tilt') html = `<div class="lg-t">Nozzle tilt</div>` + grad(PAL.tilt, [`${S.bMin}°`, '0°', `${S.bMax}°`]);
+  else if (view.color === 'rough') html = `<div class="lg-t">Path roughness (turn per segment)</div>` + grad(PAL.rough, ['0°', `${ROUGH_MAX / 2}°`, `${ROUGH_MAX}°+`]);
   else if (view.color === 'height') html = `<div class="lg-t">Height</div>` + grad(PAL.height, ['0', `${fmt(beadYmax / 2, 0)}`, `${fmt(beadYmax, 0)} mm`]);
   else if (view.color === 'flow') html = `<div class="lg-t">Plastic per mm</div>` + grad(PAL.flow, [`${S.flowLow}×`, 'typical', `${S.flowHigh}×`]) + `<div class="lg-keys"><span><i style="background:#5b6673;height:10px;width:10px"></i>Prime / unretract (normal)</span></div>`;
   else if (view.color === 'support') html = `<div class="lg-t">Support check</div><div class="lg-keys">${[['Supported', 0], ['Stray', 3], ['Overhang', 2], ['Bridge', 1], ['Short span', 5]].map(([t, k]) => `<span><i style="background:${PAL.support[k]}"></i>${t}</span>`).join('')}</div>`;
@@ -1433,7 +1461,7 @@ async function rebuild(keepT) {
   busy(true, 'Reading ' + srcName, 0);
   await nextFrame();
   const Q = await parseGcode(S, srcLines, async f => { busy(true, 'Reading ' + srcName, f * 0.7); await nextFrame(); });
-  if (!Q.n) { busy(false); toast('No moves found. The file needs G0/G1 lines with C, X, Z, B, or E words.'); if (!P) showEmpty(true); return; }
+  if (!Q.n) { busy(false); toast('No moves found. The file needs G0/G1 lines with C, X, Z, B, or E words.'); if (!P) showEmpty(true); return false; }
   busy(true, 'Planning motion', 0.75); await nextFrame();
   computeActual(S, Q); plan(S, Q);
   busy(true, 'Building beads', 0.85); await nextFrame();
@@ -1450,6 +1478,8 @@ async function rebuild(keepT) {
   if (P.beadTotal > 1500000) w.push('This file makes over 1.5 million bead segments, so the view may be slow. Raise bead smoothness in Settings.');
   if (w.length) toast(w.join(' '));
   fitView();
+  prevTip = null; // tip-speed readout restarts with the new file
+  return true;
 }
 function fitView() {
   if (!P) return;
@@ -1457,9 +1487,10 @@ function fitView() {
   orbit.target.set(0, Math.min(ymax / 2, 80), 0);
 }
 async function loadText(text, name) {
+  const prev = [srcLines, srcName];
   srcLines = text.split(/\r?\n/); srcName = name;
   setPlaying(false); manual.active = false;
-  await rebuild(false);
+  if (!(await rebuild(false))) [srcLines, srcName] = prev; // no moves: keep showing (and rebuilding) the previous file
 }
 $('#file').addEventListener('change', async e => { const f = e.target.files[0]; if (f) await loadText(await f.text(), f.name); e.target.value = ''; });
 document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => $('#file').click()));
@@ -1478,6 +1509,7 @@ function setPlaying(on) {
   if (on && !P) return;
   if (on && P && T >= P.total) T = 0;
   playing = on; if (on) manual.active = false;
+  prevTip = null; // the tip-speed readout must not measure across a pause
   $('#play').innerHTML = on ? PAUSE_ICON : PLAY_ICON;
   $('#play').setAttribute('aria-label', on ? 'Pause' : 'Play');
   $('#play').setAttribute('aria-pressed', on);

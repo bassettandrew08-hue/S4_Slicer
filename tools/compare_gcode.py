@@ -75,7 +75,7 @@ def compare(a_path, b_path, tol_pos=1e-3, tol_ang=1e-3, tol_e=1e-4, tol_f_rel=1e
             if letter == "F":
                 scale = np.maximum(np.abs(A[:, j]), 1e-12)
                 d = d / scale
-                t = max(tol_f_rel, 1e-4 / 1.0)
+                t = tol_f_rel
                 over = (d > t) & (np.abs(A[:, j] - B[:, j]) > res[j] * 1.01)
                 t_show = f"{t:.0e} rel"
             else:

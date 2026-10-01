@@ -223,7 +223,7 @@ def _format_local(r):
     return s
 
 
-def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0):
+def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0, retraction=1.0):
     """Suspicious extruding moves (longer than min_dz) in the final 4-axis G-code. Returns (poles, along_axis):
     poles start right after a travel and drop straight down more than pole_dz (extrusion dragged down from a lifted
     travel point: these print as free-standing sticks); along_axis ones run mostly along the nozzle's own axis
@@ -248,7 +248,7 @@ def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0):
     d = np.diff(P, axis=0)
     dz = np.abs(d[:, 2]); dxy = np.hypot(d[:, 0], d[:, 1])
     E = a[:, 5]
-    printing = (np.nan_to_num(E) > 0) & ~np.isclose(E, 1.0)
+    printing = (np.nan_to_num(E) > 0) & ~np.isclose(E, retraction)  # an unretract is not printing
     n = np.linalg.norm(d, axis=1)
     bb, tt = b[1:], th[1:]  # nozzle axis at the segment end: radial -sin B, vertical cos B
     axis = np.c_[-np.sin(bb) * np.cos(tt), -np.sin(bb) * np.sin(tt), np.cos(bb)]
