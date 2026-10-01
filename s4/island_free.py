@@ -40,6 +40,7 @@ DEFAULTS = dict(
     LIFT_HOLD=0.0,               # > 0: hold every vertex that was never in a pit at its fit-only height with a
                                  # two-sided spring (weight x LIFT_WEIGHT), so a pit's rim cannot be dragged up
     LIFT_HOLD_FALLOFF=0.0,       # mm (path length through the mesh): the hold ramps from 0 at the pit to full here
+    LIFT_HOLD_VOLUME_WEIGHTED=False,  # scale the hold by min(1, the vertex's volume share / median)
     BARRIER_WEIGHT=0.02,         # beta
     FLIP_FREE_STAGES=10,
     FLIP_FREE_STAGE_ITERATIONS=150,
@@ -473,8 +474,9 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
         if float(q["LIFT_ANCHOR"]) > 0:
             g0 = _grounded(V, bed)
             anchor = (g0, V[g0, 2].copy(), float(q["LIFT_ANCHOR"]) * w[g0], np.zeros(len(g0), bool))
-        # weaker where tiny tets give a vertex little fit stiffness (a strong spring there tears the mesh sideways)
-        hold_w = float(q["LIFT_HOLD"]) * float(q["LIFT_WEIGHT"]) * np.minimum(vv, 1.0)
+        hold_w = np.full(len(P0), float(q["LIFT_HOLD"]) * float(q["LIFT_WEIGHT"]))
+        if q["LIFT_HOLD_VOLUME_WEIGHTED"]:
+            hold_w *= np.minimum(vv, 1.0)  # weaker where tiny tets give a vertex little fit stiffness
         V_fit = V.copy()
         held = np.ones(len(P0), bool)
         if anchor is not None:
