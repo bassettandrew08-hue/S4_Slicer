@@ -6,7 +6,8 @@ That solve folds the mesh (202 inverted tets on the benchy) and, more importantl
 in the deformed shape. A planar slicer starts printing every such minimum in mid-air: those are the floating
 islands. This module replaces only that step; the rotation field is still the notebook's.
 
-1. Fold-free fit. Minimise over vertex positions V
+1. Fold-free fit (FIT_METHOD "barrier"; the default "penalty" replaces the barrier below by a soft penalty on
+   tets squashed below FOLD_PENALTY_DET, see PenaltyProblem). Minimise over vertex positions V
        sum_c vol_c ( |J_c - R_c|^2  +  beta (|J_c|^2 + |J_c^-1|^2 - 6) )
    J_c = deformation gradient of tet c, R_c = its target rotation. The second term (symmetric Dirichlet) is a
    barrier that is infinite at zero volume, and every step is capped before the first tet would flip, so the mesh
@@ -25,8 +26,9 @@ import numba
 import numpy as np
 from scipy.sparse import coo_matrix, diags, identity
 from scipy.sparse.linalg import splu
+from scipy.spatial.transform import Rotation
 
-from .fast_map import rotation_matrices
+from .fast_map import rotation_matrices, tangential_vectors
 
 DEFAULTS = dict(
     ISLAND_LIFT_SLOPE=0.5,       # mm of rise per mm; 0.5 ~ overhangs up to ~63 deg from vertical in deformed space
@@ -180,7 +182,7 @@ def _max_step(V, D, cells, Dm_inv, guard, tcap, rho):
         best = tcap
         steps = 32
         floor = rho * c0
-        prev_s = 0.0; prev_p = c0
+        prev_s = 0.0
         for k in range(1, steps + 1):
             s = tcap * k / steps
             p = c0 + s * (c1 + s * (c2 + s * c3))
@@ -195,7 +197,7 @@ def _max_step(V, D, cells, Dm_inv, guard, tcap, rho):
                         hi = mid
                 best = lo
                 break
-            prev_s = s; prev_p = p
+            prev_s = s
         out[t] = best
     return out
 
@@ -427,7 +429,7 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     lifted = 0
     if lift:
         tgt = np.full(len(P0), -np.inf)
-        for r in range(int(q["ISLAND_LIFT_ROUNDS"])):
+        for _ in range(int(q["ISLAND_LIFT_ROUNDS"])):
             h = priority_flood(V, nbrs, float(q["ISLAND_LIFT_SLOPE"]), bed_tol=0.5,
                                bed=_grounded(V, bed))
             need = (h - V[:, 2]) > 0.02
@@ -449,9 +451,7 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     U, _, Wt = np.linalg.svd(J)
     flip = np.linalg.det(U @ Wt) < 0
     U[flip, :, 2] *= -1
-    from scipy.spatial.transform import Rotation as _Rot
-    from .fast_map import tangential_vectors
-    about_t = np.degrees(np.einsum("ij,ij->i", _Rot.from_matrix(U @ Wt).as_rotvec(), tangential_vectors(cell_centers)))
+    about_t = np.degrees(np.einsum("ij,ij->i", Rotation.from_matrix(U @ Wt).as_rotvec(), tangential_vectors(cell_centers)))
     want = np.degrees(rotation_field)
     sel = np.abs(want) > 20.0
     def _wmed(x, w):
