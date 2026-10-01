@@ -229,7 +229,6 @@ def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0):
     travel point: these print as free-standing sticks); along_axis ones run mostly along the nozzle's own axis
     (pushing into or pulling out of the bead). A vertical move with the nozzle tilted sideways is normal S4 printing
     and isn't flagged."""
-    import re
     word = re.compile(r"([CXZBE])(-?\d+(?:\.\d*)?|-?\.\d+)")
     rows = []
     with open(gcode_path) as fh:

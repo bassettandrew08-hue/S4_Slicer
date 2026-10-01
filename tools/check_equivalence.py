@@ -71,7 +71,7 @@ def main():
                            os.path.join(cand_dir, f"{name}_deformed_tet.stl"), shallow=False)
     print(f"deformed STL byte-identical: {same_stl}"
           + ("" if same_stl else "  (planar G-code from CuraEngine may then differ; the map check below uses the reference slice)"))
-    g_ok, report = compare(ref_out, cand_out, a.tol_pos, a.tol_ang, a.tol_e)
+    g_ok, _ = compare(ref_out, cand_out, a.tol_pos, a.tol_ang, a.tol_e)
     ok &= g_ok
     same_gcode = filecmp.cmp(ref_out, cand_out, shallow=False)
     print(f"final G-code byte-identical: {same_gcode}")

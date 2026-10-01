@@ -161,8 +161,6 @@ class Stack:
 
 
 class CuraProject:
-    CONTAINER_ORDER = ["user", "quality_changes", "intent", "quality", "material", "variant", "definition_changes"]
-
     def __init__(self, threemf_path, cura_engine=None):
         self.engine = cura_engine or find_cura_engine()
         res = os.path.join(os.path.dirname(self.engine), "share", "cura", "resources")

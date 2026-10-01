@@ -21,6 +21,7 @@ import difflib
 import json
 import math
 import os
+import re
 
 from .params import DEFAULT_PARAMS
 
@@ -227,5 +228,4 @@ def to_json(p):
                     it[k + "_DEG"] = round(math.degrees(it.pop(k)), 6)
     text = json.dumps(out, indent=2)
     # keep short lists of numbers on one line ("PART_OFFSET": [0, 10, 0])
-    import re
     return re.sub(r"\[\s*([-\d.eE+,\s]+?)\s*\]", lambda m: "[" + ", ".join(x.strip() for x in m.group(1).split(",")) + "]", text)

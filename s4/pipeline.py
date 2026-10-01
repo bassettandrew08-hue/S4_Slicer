@@ -39,6 +39,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     stl_path = os.path.join(work_dir, f"{name}_deformed_tet.stl")
     planar_path = sliced_gcode or os.path.join(work_dir, f"{name}_deformed_tet.gcode")
     t0 = time.perf_counter()
+    from . import support_check as sc  # heavy imports (open3d, pyvista): only when a run starts
 
     with TIMER(f"TOTAL ({impl})"):
         # ---- 1. deform
@@ -104,15 +105,13 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
                                                    mp["MAX_SPEED_Z"], nozzle_offset=mp["NOZZLE_OFFSET"]))
         if support_check:
             with TIMER("4. support check"):
-                from . import support_check as sc
                 from .params import expand_iterations
                 support = sc.check(model_path, np.asarray(deformed.points), planar_path,
                                    part_offset=expand_iterations(p)[0], retraction_length=retraction,
                                    seg_size=mp["SEG_SIZE"])
             stats["floating_points"] = support["floating_points"]
             log(sc.format_report(support))
-    from . import support_check as sc2
-    poles = sc2.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"])
+    poles = sc.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"])
     stats["poles"] = len(poles[0])
     if support_check:
         stats["ungrounded_mm"] = round(support["ungrounded_mm"], 1)
@@ -138,7 +137,7 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
     shown = dict(prof); shown["map"] = dict(prof["map"], RETRACTION_LENGTH=retraction)  # the value actually used
     header = sim_header.build(name, shown, stats, planar_path, info, _fd.LAST_DEFORM_INFO)
     sim_header.prepend(out_gcode, header)
-    log(sc2.format_vertical(poles, line_offset=len(header)))  # line numbers in the final file
+    log(sc.format_vertical(poles, line_offset=len(header)))  # line numbers in the final file
     total = time.perf_counter() - t0
     log(f"[map] {stats}")
     log(f"[done] {out_gcode}  ({total:.1f} s)")
