@@ -109,7 +109,7 @@ Cura's planar toolpath, to separate the shape's problems from the mapping's.
 | `s4/fast_lsq.py` | numba-accelerated sparse least-squares for the notebook-method solve, bit-identical to scipy's |
 | `s4/island_free.py` | the `island_free` method: the fit-then-lift driver, the priority flood that finds pits, and the lift targets |
 | `s4/island_free_solver.py` | the fit solver behind it: the penalty and barrier problems and their L-BFGS minimiser |
-| `s4/geometry.py` | small geometry helpers shared by the deformation, mapping and checks |
+| `s4/geometry.py` | the machine geometry shared by the deformation, mapping and checks: per-tet target rotations about the tangential axis, and the nozzle-tip position from C/X/Z/B |
 | `s4/cura.py` | headless CuraEngine: resolves the 3mf setting stack, writes the `.def.json`, runs the engine |
 | `s4/fast_map.py` | maps Cura's planar G-code back to 4 axes (B, C, X, Z, E) and writes the final G-code |
 | `s4/feed_limits.py` | post-processing: stretches each move's G93 time so no axis exceeds its speed limit |

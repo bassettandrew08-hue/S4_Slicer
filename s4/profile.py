@@ -27,7 +27,7 @@ from .params import DEFAULT_PARAMS
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# notebook cell 17/18 constants + the output fixes (see S4_PIPELINE.md)
+# notebook cell 17/18 constants + the output fixes (see docs/SETTINGS.md, Differences from the notebook)
 MAP_DEFAULTS = dict(
     SEG_SIZE=0.6,                   # mm, planar moves are split into segments of at most this length
     MAX_ROTATION=30,                # deg, B-axis limit (positive tilt)

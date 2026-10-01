@@ -38,7 +38,8 @@ def bead_segments(gcode_path, nozzle_offset=42.0):
     k = k.astype(int)
     mv = np.repeat(np.arange(len(a)), k)
     j = np.arange(k.sum()) - np.repeat(np.cumsum(k) - k, k)
-    f0 = j / k[mv]; f1 = (j + 1) / k[mv]
+    f0 = j / k[mv]
+    f1 = (j + 1) / k[mv]
 
     def tip(f):
         s = a[mv, :4] + (a[mv, 4:] - a[mv, :4]) * f[:, None]
@@ -81,11 +82,13 @@ def vertical_extrusion(gcode_path, nozzle_offset=42.0, min_dz=1.0, pole_dz=2.0, 
     if len(rows) < 2:
         return [], []
     a = np.array(rows)
-    b = np.radians(a[:, 4]); th = np.radians(a[:, 1])
+    b = np.radians(a[:, 4])
+    th = np.radians(a[:, 1])
     x, y, z = nozzle_tip(a[:, 1], a[:, 2], a[:, 3], a[:, 4], nozzle_offset)
     P = np.c_[x, y, z]
     d = np.diff(P, axis=0)
-    dz = np.abs(d[:, 2]); dxy = np.hypot(d[:, 0], d[:, 1])
+    dz = np.abs(d[:, 2])
+    dxy = np.hypot(d[:, 0], d[:, 1])
     E = a[:, 5]
     printing = (np.nan_to_num(E) > 0) & ~np.isclose(E, retraction)  # an unretract is not printing
     n = np.linalg.norm(d, axis=1)
