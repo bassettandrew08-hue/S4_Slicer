@@ -40,11 +40,25 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
   numbers don't change.
 - TetGen's `_skipped.face` / `_skipped.node` dumps of a rejected surface are deleted after the cleanup retry.
 
-### Known problem
-- `axis model w markers2` with default settings: the marker holes' rims are drawn with 0.04 mm segments, TetGen
-  fills them with microscopic tets (399,265 tets for an 8,500-triangle surface), and the deformation tears a cluster
-  of them at the hole at z = 11 apart. About 12 m of wall toolpath then maps into that 2 mm hole; the support check
-  reports it as ~12,700 mm ungrounded. Not fixed yet.
+### Added
+- **`SURFACE_SIMPLIFY_ERROR`** (deform, default 0 = off) and `params/axis model w markers2.json`, which sets it to
+  1e-5. That model's marker holes are drawn with 0.04 mm segments; TetGen filled them with microscopic tets
+  (399,265 tets for an 8,500-triangle surface) and the deformation tore a cluster of them apart at the hole at
+  z = 11, so about 12 m of wall toolpath mapped into that 2 mm hole. The setting coarsens needlessly fine
+  triangles before TetGen (quadric edge collapse with an error bound) and logs how far the surface moved:
+
+  | axis model w markers2 | default | `SURFACE_SIMPLIFY_ERROR` 1e-5 |
+  |---|---|---|
+  | surface triangles / tets | 8,500 / 399,265 | 3,232 / 50,292 |
+  | surface moved | - | at most 0.012 mm |
+  | inverted tets | 44,679 | 818 |
+  | ungrounded (walls/skin) | 12,767 mm (11,780) | 47 mm (47) |
+  | island / cantilever / bridge | 27.6 / 47.3 / 215.3 mm | 23.9 / 39.5 / 103.8 mm |
+  | extrusion along the nozzle axis | 163 moves | none |
+  | full run | 12 min | 1.5-4 min |
+
+  Off by default, so every other model's mesh and output are unchanged (`--notebook-exact` body identical,
+  fast = reference, six-model suite unchanged).
 
 ---
 

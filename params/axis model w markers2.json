@@ -1,0 +1,6 @@
+{
+  "description": "Marker holes are drawn with 0.04 mm segments; simplify them before TetGen or the deformation tears the microscopic tets there apart (CHANGELOG 2026-10-07).",
+  "deform": {
+    "SURFACE_SIMPLIFY_ERROR": 1e-5
+  }
+}

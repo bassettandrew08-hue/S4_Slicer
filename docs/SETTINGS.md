@@ -45,6 +45,7 @@ from it.
 | `INITIAL_ROTATION_FIELD_SMOOTHING` | 30 | 0 = off; any other value = one smoothing pass ([why](../S4_PIPELINE.md#5-known-limitations)) |
 | `MAX_POS_ROTATION`, `MAX_NEG_ROTATION` | ±360° | clamp on the target rotation |
 | `PART_OFFSET` | [0, 0, 0] | shift the part on the plate, in mm (subtracted) |
+| `SURFACE_SIMPLIFY_ERROR` | 0 (off) | not in the notebook. Coarsen needlessly fine surface triangles before TetGen (quadric error bound; `1e-5` ≈ 0.01 mm). For CAD exports that draw small holes with tiny segments: TetGen fills them with microscopic tets that the deformation tears apart. The log prints how far the surface moved. Whole run only, not per iteration |
 | `ROTATION_ITERATIONS` | 100 | solver budget for the tilt field. Changing it changes the result, not just the speed |
 | `iterations` | (none) | multi-iteration schedule, see above |
 

@@ -50,9 +50,11 @@ def _planar_layers(planar_path, seg_size):
 
 
 def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), radius=1.0, seg_size=0.6,
-          retraction_length=1.0, input_grid=None):
-    """input_grid: undeformed tet mesh to use instead of re-running tetgen on model_path."""
-    inp = input_grid if input_grid is not None else meshio_s4.load_and_tetrahedralize(model_path, part_offset)
+          retraction_length=1.0, input_grid=None, simplify_error=0.0):
+    """input_grid: undeformed tet mesh to use instead of re-running tetgen on model_path (simplify_error: the
+    deform's SURFACE_SIMPLIFY_ERROR, so the re-run gives the same mesh)."""
+    inp = input_grid if input_grid is not None else meshio_s4.load_and_tetrahedralize(model_path, part_offset,
+                                                                                       simplify_error)
     cells = meshio_s4.cells_of(inp)
     P0 = np.asarray(inp.points)
     Pd = np.asarray(deformed_points)
@@ -300,7 +302,8 @@ def format_report(r):
     s = (f"[support] ungrounded (no support chain to the bed): {r.get('ungrounded_real_mm', 0):.0f} mm of extrusion in "
          f"{len(regs)} regions, {r.get('ungrounded_wall_mm', 0):.0f} mm of it walls/skin (the rest sparse infill)")
     if r.get("regions_approx"):
-        s += "\n[support]   (thousands of points piled into the same spots, a sign of a bad mapping: regions approximate)"
+        s += ("\n[support]   (thousands of points piled into the same spots, a sign of a bad mapping: "
+              "regions approximate)")
     for g in regs[:3]:
         s += (f"\n[support]   ~{g['mm']:.0f} mm, layers {g['layers'][0]}-{g['layers'][1]}, at {g['centre']}, "
               f"{', '.join(f'{t} {n}' for t, n in g['types'])}")

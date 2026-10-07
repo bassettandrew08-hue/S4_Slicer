@@ -57,7 +57,8 @@ def main():
             sys.exit("--sliced is required for map")
         if args.stage == "map":
             with TIMER("cell 2: mesh setup (for input_tet)"):
-                input_tet = ref.run_cell2(args.model, np.asarray(params["PART_OFFSET"], dtype=float), name)
+                input_tet = ref.run_cell2(args.model, np.asarray(params["PART_OFFSET"], dtype=float), name,
+                                          params.get("SURFACE_SIMPLIFY_ERROR", 0.0))
         pkl = args.deformed_pkl or os.path.join(args.out, "deformed_tet.pkl")
         with TIMER("load deformed pickle"):
             deformed_tet = pickle.load(open(pkl, "rb"))

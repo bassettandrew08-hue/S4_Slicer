@@ -139,7 +139,8 @@ def merge(profile, overlay, where="profile"):
             clean = []
             for i, it in enumerate(its):
                 it = _normalise_deg({k: v for k, v in it.items() if not k.startswith("_")})
-                _check_keys("deform", it, [k for k in DEFAULT_PARAMS if k != "PART_OFFSET"],
+                mesh_keys = ("PART_OFFSET", "SURFACE_SIMPLIFY_ERROR")  # one mesh for all iterations
+                _check_keys("deform", it, [k for k in DEFAULT_PARAMS if k not in mesh_keys],
                             f"{where} iteration {i + 1}")
                 clean.append(it)
             p["deform"]["iterations"] = clean

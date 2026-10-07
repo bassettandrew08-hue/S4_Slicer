@@ -206,11 +206,11 @@ def update_attributes(tet, cell_to_face, graph, compute_in_air=True, dijkstra_ca
     return bottom_cells_mask, bottom_cells, distances, paths
 
 
-def prepare_mesh(model_path, part_offset=(0., 0., 0.)):
+def prepare_mesh(model_path, part_offset=(0., 0., 0.), simplify_error=0.0):
     """Notebook cell 2 (fast)."""
     ctx = MeshContext()
     with TIMER("load + tetgen"):
-        tet = meshio_s4.load_and_tetrahedralize(model_path, part_offset)
+        tet = meshio_s4.load_and_tetrahedralize(model_path, part_offset, simplify_error)
     cells = meshio_s4.cells_of(tet)
     ctx.tet, ctx.cells = tet, cells
 
@@ -467,7 +467,7 @@ def deform(model_path, params=None, verbose=0):
     from .params import expand_iterations
     part_offset, iterations = expand_iterations(params)
     with TIMER("mesh setup"):
-        ctx = prepare_mesh(model_path, part_offset)
+        ctx = prepare_mesh(model_path, part_offset, iterations[0]["SURFACE_SIMPLIFY_ERROR"])
     tet = ctx.tet
     for it, p in enumerate(iterations):
         tag = f" [iteration {it + 1}/{len(iterations)}]" if len(iterations) > 1 else ""

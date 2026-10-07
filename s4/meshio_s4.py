@@ -67,10 +67,40 @@ def tetrahedralize(vertices, faces):
     return tg.grid
 
 
-def load_and_tetrahedralize(model_path, part_offset=(0., 0., 0.)):
-    """Notebook cell 2 (first part): identical calls, so identical tetgen output."""
+def simplify_surface(vertices, faces, max_error):
+    """Coarsen needlessly fine tessellation (CAD exports can draw a 1 mm hole's rim with 0.04 mm segments, which
+    TetGen fills with microscopic tets that the deformation tears apart). Quadric edge collapse that stops once a
+    collapse would cost more than `max_error` (quadric error, roughly squared mm: 1e-5 moved the surface of
+    axis model w markers2 by at most 0.012 mm). Flat areas and fine curves lose triangles; the shape stays."""
+    v, f = clean_surface(vertices, faces)
+    src = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(v), o3d.utility.Vector3iVector(f))
+    s = src.simplify_quadric_decimation(0, maximum_error=max_error)
+    s.remove_duplicated_vertices()
+    s.remove_degenerate_triangles()
+    s.remove_unreferenced_vertices()
+
+    def dist(mesh, pts):  # unsigned distance of points to a mesh's surface
+        scene = o3d.t.geometry.RaycastingScene()
+        scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mesh))
+        return scene.compute_distance(o3d.core.Tensor(np.asarray(pts, dtype=np.float32))).numpy()
+    moved = max(dist(s, v).max(), dist(src, s.sample_points_uniformly(100000).points).max())
+    print(f"[mesh] SURFACE_SIMPLIFY_ERROR {max_error:g}: {len(f)} -> {len(s.triangles)} triangles, surface moved "
+          f"at most {moved:.3f} mm", flush=True)
+    return np.asarray(s.vertices), np.asarray(s.triangles)
+
+
+def read_surface(model_path, simplify_error=0.0):
+    """The model's triangles (vertices, faces) as the notebook reads them, simplified first if simplify_error > 0."""
     mesh = o3d.io.read_triangle_mesh(model_path)
-    grid = tetrahedralize(np.asarray(mesh.vertices), np.asarray(mesh.triangles))
+    v, f = np.asarray(mesh.vertices), np.asarray(mesh.triangles)
+    if simplify_error and simplify_error > 0:
+        v, f = simplify_surface(v, f, float(simplify_error))
+    return v, f
+
+
+def load_and_tetrahedralize(model_path, part_offset=(0., 0., 0.), simplify_error=0.0):
+    """Notebook cell 2 (first part): identical calls, so identical tetgen output (with simplify_error 0)."""
+    grid = tetrahedralize(*read_surface(model_path, simplify_error))
     x_min, x_max, y_min, y_max, z_min, z_max = grid.bounds
     grid.points -= np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, z_min]) + np.asarray(part_offset, dtype=float)
     return grid
