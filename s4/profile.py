@@ -51,6 +51,10 @@ MAP_DEFAULTS = dict(
     # used the previous move's, giving extruding G00 lines and non-extruding G01 lines); (c) points mapped just below
     # the bed are clamped to it instead of dropped
     SAFE_TRAVEL_TRANSITIONS=True,
+    # a print step (planar steps are at most SEG_SIZE long) that maps to more than this many mm is a fold in the
+    # deformation (two far-apart places of the part meet in the deformed shape): travel across instead of drawing
+    # a line of plastic through the air. Real steps stay under ~1.1 mm on all suite models. null = off
+    MAX_PRINT_JUMP=3.0,
     # slow down any move that would drive an axis past these speeds (the notebook timed moves by the planar G-code
     # only, asking for thousands of deg/s on C and B). Placeholders: set your machine's real limits
     LIMIT_AXIS_SPEEDS=True,
@@ -77,7 +81,7 @@ CURA_DEFAULTS = dict(
 )
 NOTEBOOK_EXACT = {"deform": {"DEFORMATION_METHOD": "notebook"},
                   "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False,
-                          "SAFE_TRAVEL_TRANSITIONS": False, "LIMIT_AXIS_SPEEDS": False,
+                          "SAFE_TRAVEL_TRANSITIONS": False, "LIMIT_AXIS_SPEEDS": False, "MAX_PRINT_JUMP": None,
                           "EXTRUSION_MULTIPLIER_RANGE": None},
                   "cura": {"strip_start_prime": False}}
 DEG_KEYS = {"MAX_POS_ROTATION", "MAX_NEG_ROTATION", "ROTATION_MAX_DELTA"}

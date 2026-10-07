@@ -27,6 +27,7 @@ from scipy.sparse import lil_matrix
 from scipy.spatial.transform import Rotation as R
 
 from . import meshio_s4
+from .fast_map import _jump2
 from .timing import TIMER
 
 up_vector = np.array([0, 0, 1])
@@ -755,6 +756,7 @@ MAPPING_DEFAULTS = dict(
     SMOOTH_EXTRUSION_MULTIPLIER=False,  # not in the notebook; see s4/fast_map.py
     EXTRUSION_MULTIPLIER_RANGE=None,  # not in the notebook; see s4/fast_map.py
     SAFE_TRAVEL_TRANSITIONS=False,  # not in the notebook; see s4/fast_map.py
+    MAX_PRINT_JUMP=None,  # not in the notebook; see s4/fast_map.py
 )
 
 
@@ -942,6 +944,7 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
         SMOOTH_EXTRUSION_MULTIPLIER = mp["SMOOTH_EXTRUSION_MULTIPLIER"]
         EXTRUSION_MULTIPLIER_RANGE = mp["EXTRUSION_MULTIPLIER_RANGE"]
         SAFE_TRAVEL_TRANSITIONS = mp["SAFE_TRAVEL_TRANSITIONS"]
+        MAX_PRINT_JUMP = mp["MAX_PRINT_JUMP"]
         last_bary = {}
         lost_vertices = []
         highest_printed_point = 0
@@ -1008,6 +1011,10 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
 
             move_command = command
             if reentry is not None and command == "G01" and extrusion is not None and extrusion != RETRACTION_LENGTH and extrusion != -RETRACTION_LENGTH:
+                move_command = "G00"; extrusion = None; lost_vertices.append(position)  # not in the notebook
+            elif (MAX_PRINT_JUMP and command == "G01" and extrusion is not None and extrusion != RETRACTION_LENGTH
+                  and extrusion != -RETRACTION_LENGTH and prev_new_position is not None
+                  and _jump2(prev_new_position, new_position) > MAX_PRINT_JUMP * MAX_PRINT_JUMP):
                 move_command = "G00"; extrusion = None; lost_vertices.append(position)  # not in the notebook
             extrusion_multiplier = 1
             if extrusion is not None and extrusion != RETRACTION_LENGTH and extrusion != -RETRACTION_LENGTH:
