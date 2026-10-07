@@ -101,7 +101,6 @@ Each is on by default and off with `--notebook-exact` (see [Differences](#differ
 | `SMOOTH_EXTRUSION_MULTIPLIER` | true | smooth the extrusion compensation along the path |
 | `SPLIT_RETRACTIONS` | true | retract/unretract in place |
 | `SAFE_TRAVEL_TRANSITIONS` | true | lower the nozzle after a travel that left the part, before printing |
-| `MAX_PRINT_JUMP` | 3.0 | a print step that maps to more than this many mm (a fold in the deformation) becomes a travel instead of a line of plastic through the air (`null` = off) |
 
 ### Machine limits
 | setting | default | what it does |
@@ -146,7 +145,6 @@ notebook's in every case.
 | extrusion compensation | `SMOOTH_EXTRUSION_MULTIPLIER`, `EXTRUSION_MULTIPLIER_RANGE` | blended smoothly along the path and clamped to 0.5×-2× (was constant per tet, so flow jumped) |
 | start code | `strip_start_prime` | Cura's prime is dropped (it became a floating blob inside the part) |
 | travel re-entry | `SAFE_TRAVEL_TRANSITIONS` | after a travel that left the part, the nozzle lowers before printing (the notebook drew "poles"); rotation-split steps keep their own move's command; points mapped just below the bed are clamped to it instead of dropped |
-| print jumps | `MAX_PRINT_JUMP` | a print step whose ends map more than 3 mm apart travels instead of extruding (the notebook drew a thin line across the gap) |
 | nozzle offset | `NOZZLE_OFFSET` | taken from the profile (was hard-coded) |
 | axis speeds | `LIMIT_AXIS_SPEEDS`, `MAX_SPEED_*` | each move takes at least as long as every axis needs at its limit (the notebook used the planar move's time); the G94 `F20000` moves become G93 too |
 

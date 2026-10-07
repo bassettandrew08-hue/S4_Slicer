@@ -35,18 +35,9 @@ MAPPING_DEFAULTS = dict(
     SMOOTH_EXTRUSION_MULTIPLIER=False,
     EXTRUSION_MULTIPLIER_RANGE=None,
     SAFE_TRAVEL_TRANSITIONS=False,
-    MAX_PRINT_JUMP=None,
 )
 
 _WORD = re.compile(r"([A-Za-z])\s*(-?(?:\d+\.?\d*|\.\d+))")
-
-
-def _jump2(a, b):
-    """Squared distance between two mapped points (plain floats, the same arithmetic in fast and reference)."""
-    dx = float(b[0]) - float(a[0])
-    dy = float(b[1]) - float(a[1])
-    dz = float(b[2]) - float(a[2])
-    return dx * dx + dy * dy + dz * dz
 
 
 def _abs_det3(rows):
@@ -252,8 +243,7 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
     Flags (all False = notebook-exact; S4_PIPELINE.md 'Differences from the notebook'): SPLIT (SPLIT_RETRACTIONS)
     retracts/unretracts in place as e_only moves; SAFE (SAFE_TRAVEL_TRANSITIONS) lowers to the true re-entry
     height after a travel that left the part, keeps each split step's own command and clamps z < 0 to the bed;
-    MRANGE (EXTRUSION_MULTIPLIER_RANGE) clamps the multiplier; JUMP (MAX_PRINT_JUMP) turns a print step longer than
-    that (mm, after mapping) into a travel. Returns the o_* lists as a dict, plus '_lost'.
+    MRANGE (EXTRUSION_MULTIPLIER_RANGE) clamps the multiplier. Returns the o_* lists as a dict, plus '_lost'.
     """
     ALPHA = mp["ROTATION_AVERAGING_ALPHA"]
     RET = mp["RETRACTION_LENGTH"]
@@ -262,7 +252,6 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
     SPLIT = mp["SPLIT_RETRACTIONS"]
     MRANGE = mp["EXTRUSION_MULTIPLIER_RANGE"]
     SAFE = mp["SAFE_TRAVEL_TRANSITIONS"]
-    JUMP = mp["MAX_PRINT_JUMP"]
     lim45 = float(np.deg2rad(45))
 
     commands = g["command"]
@@ -331,11 +320,6 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
         move_command = command
         if reentry is not None and command == "G01" and extrusion is not None and extrusion != RET and extrusion != -RET:
             # a print move whose start was off the part: travel over its end point instead of extruding in the air
-            move_command = "G00"; extrusion = None; lost += 1
-        elif (JUMP and command == "G01" and extrusion is not None and extrusion != RET and extrusion != -RET
-              and prev_new_position is not None and _jump2(prev_new_position, new_position) > JUMP * JUMP):
-            # a print step whose two ends map far apart (a fold in the deformation): travel, don't draw plastic
-            # across the gap
             move_command = "G00"; extrusion = None; lost += 1
         extrusion_multiplier = 1
         if extrusion is not None and extrusion != RET and extrusion != -RET:

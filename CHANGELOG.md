@@ -42,35 +42,23 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 
 ### Added
 - **`SURFACE_SIMPLIFY_ERROR`** (deform, default 0 = off) and `params/axis model w markers2.json`, which sets it to
-  1e-6. That model's marker holes are drawn with 0.04 mm segments; TetGen filled them with microscopic tets
+  1e-5. That model's marker holes are drawn with 0.04 mm segments; TetGen filled them with microscopic tets
   (399,265 tets for an 8,500-triangle surface) and the deformation tore a cluster of them apart at the hole at
   z = 11, so about 12 m of wall toolpath mapped into that 2 mm hole. The setting coarsens needlessly fine
-  triangles before TetGen (quadric edge collapse with an error bound) and logs how far the surface moved.
-- **`MAX_PRINT_JUMP`** (map, default 3 mm; off with `--notebook-exact`). In the inner corner between the post and
-  the +Y arm the deformation folds: spots next to each other in the deformed shape come from places up to 18 mm
-  apart in the part. The mapper drew a thin line of plastic across each gap (a 0.07 mm planar step became a 16.8 mm
-  line), and together they printed as a fin with two rails, 2.7 m of extrusion outside the part. A print step that
-  maps longer than `MAX_PRINT_JUMP` now becomes a travel. Real print steps are at most 1.1 mm on all six suite
-  models, so their output doesn't change; forcing the guard on pi (0.5 mm, 56,301 steps) gives byte-identical fast
-  and reference G-code.
+  triangles before TetGen (quadric edge collapse with an error bound) and logs how far the surface moved:
 
-  | axis model w markers2 | before | `SURFACE_SIMPLIFY_ERROR` 1e-5 | 1e-6 + `MAX_PRINT_JUMP` |
-  |---|---|---|---|
-  | surface triangles | 8,500 | 3,232 | 4,796 |
-  | surface moved | - | at most 0.012 mm | at most 0.005 mm |
-  | inverted tets | 44,679 | 818 | 372 |
-  | ungrounded (walls/skin) | 12,767 mm | 47 mm | 13 mm |
-  | island / cantilever | 27.6 / 47.3 mm | 23.9 / 39.5 mm | 14.9 / 36.2 mm |
-  | extrusion > 1 mm outside the part | not measured | 2,692 mm | 0 mm (493 mm without the guard) |
+  | axis model w markers2 | default | `SURFACE_SIMPLIFY_ERROR` 1e-5 |
+  |---|---|---|
+  | surface triangles / tets | 8,500 / 399,265 | 3,232 / 50,292 |
+  | surface moved | - | at most 0.012 mm |
+  | inverted tets | 44,679 | 818 |
+  | ungrounded (walls/skin) | 12,767 mm (11,780) | 47 mm (47) |
+  | island / cantilever / bridge | 27.6 / 47.3 / 215.3 mm | 23.9 / 39.5 / 103.8 mm |
+  | extrusion along the nozzle axis | 163 moves | none |
+  | full run | 12 min | 1.5-4 min |
 
-  Other values tried (without the guard): 1e-7 = 8,228 inverted tets, 100 mm ungrounded, 632 mm outside;
-  1e-4 = 147 mm ungrounded, 340 mm outside. Both settings are off or inactive on every other model.
-
-### Known problem
-- `axis model w markers2`: the top ~15 mm of the post prints rougher than the rest (rough path segments 2.5-6%
-  per face at z 92-100, under 2% below z 80), worst on the face with the engraved letters. It's the same with every
-  simplify value and nothing there lands outside the part: it comes from how hard the deformation tilts the end of
-  the print, not from the mesh or the mapping.
+  Off by default, so every other model's mesh and output are unchanged (`--notebook-exact` body identical,
+  fast = reference, six-model suite unchanged).
 
 ---
 
