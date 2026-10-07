@@ -22,11 +22,11 @@ import networkx as nx
 import numpy as np
 import open3d as o3d
 import pyvista as pv
-import tetgen
 from scipy.optimize import least_squares
 from scipy.sparse import lil_matrix
 from scipy.spatial.transform import Rotation as R
 
+from . import meshio_s4
 from .timing import TIMER
 
 up_vector = np.array([0, 0, 1])
@@ -213,9 +213,8 @@ def run_cell2(model_path, PART_OFFSET=np.array([0., 0., 0.]), name=None):
     with TIMER("load + tetgen"):
         mesh = o3d.io.read_triangle_mesh(model_path)
         # convert to tetrahedral mesh
-        input_tet = tetgen.TetGen(np.asarray(mesh.vertices), np.asarray(mesh.triangles))
-        input_tet.tetrahedralize()
-        input_tet = input_tet.grid
+        # (the notebook's TetGen calls; meshio_s4 only adds a cleanup retry when TetGen rejects the surface)
+        input_tet = meshio_s4.tetrahedralize(np.asarray(mesh.vertices), np.asarray(mesh.triangles))
 
     x_min, x_max, y_min, y_max, z_min, z_max = input_tet.bounds
     input_tet.points -= np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, z_min]) + PART_OFFSET

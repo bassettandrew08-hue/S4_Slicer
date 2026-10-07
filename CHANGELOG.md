@@ -6,6 +6,7 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 `benchy upsidedown tilted` (33,156 tets) and `pi 3mm` models with default settings, unless noted.
 
 **Entries**
+- [2026-10-07: Meshes with CAD-export junk, support check on large prints](#2026-10-07-meshes-with-cad-export-junk-support-check-on-large-prints)
 - [2026-10-01: Smoother lifted surfaces, six-model quality suite](#2026-10-01-smoother-lifted-surfaces-six-model-quality-suite)
 - [2026-10-01: Bug fixes, cleanup, path-roughness view](#2026-10-01-bug-fixes-cleanup-path-roughness-view)
 - [2026-09-28: R-Theta Sim in the repo, print times in sync](#2026-09-28-r-theta-sim-in-the-repo-print-times-in-sync)
@@ -16,6 +17,34 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 - [2026-09-27: Island-free deformation](#2026-09-27-island-free-deformation)
 - [2026-09-26: Output fixes, build profiles, docs](#2026-09-26-output-fixes-build-profiles-docs)
 - [2026-09-25: Headless pipeline](#2026-09-25-headless-pipeline)
+
+---
+
+## 2026-10-07: Meshes with CAD-export junk, support check on large prints
+
+### Fixed
+- **STLs that TetGen rejects** ("The input surface mesh contain self-intersections"), e.g. `axis model w markers2`:
+  the part itself was watertight, but the CAD export left zero-area sliver triangles around the markers. When
+  TetGen rejects a surface, `meshio_s4.tetrahedralize` now retries once on a cleaned copy (vertices closer than
+  0.001 mm merged, sliver and duplicate triangles dropped, loose flat pieces with no volume dropped) and prints
+  `[mesh] ... Retrying`. Meshes that TetGen accepts as they are never reach the cleanup, so every other model's
+  output is unchanged; the reference implementation uses the same call.
+- **Support check out of memory or running for hours on large prints** (`axis model w markers2`: MemoryError,
+  20+ GB, 28 minutes): it listed every pair of path points within 1 mm, about 2.7 billion pairs there. It now sweeps
+  the layers in print order and only asks "is anything from an earlier layer within 1 mm" (a count, from KD-trees
+  of the earlier points), never listing neighbours: 15 s and 0.3 GB on that model. Byte-identical reports on all six
+  suite models, and a little faster. When a bad mapping piles thousands of points into one spot, the ungrounded
+  regions in the report are grouped by 1 mm grid cells instead of exact pairs, and the report says so.
+- **Support check: a point with more than 127 grounded neighbours could count as floating.** The old neighbour
+  count was an 8-bit integer and wrapped negative; the new check doesn't count in 8 bits. The six suite models'
+  numbers don't change.
+- TetGen's `_skipped.face` / `_skipped.node` dumps of a rejected surface are deleted after the cleanup retry.
+
+### Known problem
+- `axis model w markers2` with default settings: the marker holes' rims are drawn with 0.04 mm segments, TetGen
+  fills them with microscopic tets (399,265 tets for an 8,500-triangle surface), and the deformation tears a cluster
+  of them at the hole at z = 11 apart. About 12 m of wall toolpath then maps into that 2 mm hole; the support check
+  reports it as ~12,700 mm ungrounded. Not fixed yet.
 
 ---
 

@@ -93,6 +93,54 @@ def check_planar(planar_path, radius=1.0, seg_size=0.6, retraction_length=1.0):
     return r
 
 
+class _Earlier:
+    """The points added so far (earlier layers), for "is any of them within R" and "how far is the nearest" queries.
+
+    Counts only, never neighbour lists: a 0.13 mm-layer print has ~200 neighbours within 1 mm a point, and a badly
+    mapped spot 10^4 or more, too many to list. The points live in a big KD-tree plus a small one for the latest
+    layers; the big one is rebuilt when the small one outgrows a quarter of it, so the rebuilds cost O(n log n)."""
+
+    def __init__(self, R):
+        self.R = R
+        self.big_pts = np.zeros((0, 3))
+        self.big = None
+        self.recent = []
+        self.small = None
+
+    def add(self, pts):
+        if len(pts) == 0:
+            return
+        self.recent.append(pts)
+        n_recent = sum(len(p) for p in self.recent)
+        if n_recent > max(20000, len(self.big_pts) // 4):
+            self.big_pts = np.concatenate([self.big_pts] + self.recent)
+            self.big = cKDTree(self.big_pts)
+            self.recent = []
+        self.small = cKDTree(np.concatenate(self.recent)) if self.recent else None
+
+    def _trees(self):
+        return [t for t in (self.big, self.small) if t is not None]
+
+    def any_within(self, pts):
+        hit = np.zeros(len(pts), bool)
+        for t in self._trees():
+            hit |= t.query_ball_point(pts, self.R, return_length=True) > 0
+        return hit
+
+    def nearest(self, pts):
+        d = np.full(len(pts), np.inf)
+        for t in self._trees():
+            d = np.minimum(d, t.query(pts, k=1)[0])
+        return d
+
+
+def _layer_order(Ly):
+    """Point indices of each layer, lowest layer first."""
+    order = np.argsort(Ly, kind="stable")
+    bounds = np.r_[0, np.cumsum(np.bincount(Ly - Ly.min()))]
+    return [order[bounds[k]:bounds[k + 1]] for k in range(len(bounds) - 1) if bounds[k + 1] > bounds[k]]
+
+
 def analyse(real, ext, layer, types, radius):
     """Print-order support analysis of an extrusion path (points `real`, in print order)."""
     P = real
@@ -100,19 +148,18 @@ def analyse(real, ext, layer, types, radius):
     ei = np.nonzero(ext)[0]
     Q = real[ei]
     Ly = layer[ei]
-    tree = cKDTree(Q)
     unsupported = Q[:, 2] > radius
-    cand = np.nonzero(unsupported)[0]
-    for k, nbrs in zip(cand, tree.query_ball_point(Q[cand], radius)):
-        if len(nbrs) and Ly[np.asarray(nbrs)].min() < Ly[k]:
-            unsupported[k] = False
+    gap = np.full(len(P), np.nan)
+    earlier = _Earlier(radius)
+    for idx in _layer_order(Ly):
+        c = idx[unsupported[idx]]
+        if len(c):
+            unsupported[c] = ~earlier.any_within(Q[c])
+            f = c[unsupported[c]]
+            gap[ei[f]] = np.minimum(earlier.nearest(Q[f]), Q[f, 2])  # gap to anything printed earlier, or the bed
+        earlier.add(Q[idx])
     floating = np.zeros(len(P), bool)
     floating[ei[unsupported]] = True
-    gap = np.full(len(P), np.nan)
-    for k in np.nonzero(unsupported)[0]:  # exact gap only for the (few) floating points
-        earlier = Q[Ly < Ly[k]]
-        g = np.min(np.linalg.norm(earlier - Q[k], axis=1)) if len(earlier) else np.inf
-        gap[ei[k]] = min(g, Q[k, 2])
 
     fl = np.nonzero(floating)[0]
     ug_mm, regions, ug_len = grounded_regions(real, ext, layer, types, radius)
@@ -143,6 +190,7 @@ def analyse(real, ext, layer, types, radius):
         "ungrounded_real_mm": ug_len["real_mm"],  # true path length
         "ungrounded_wall_mm": ug_len["wall_mm"],  # of it, walls and skin (not sparse infill)
         "regions": regions,
+        "regions_approx": ug_len["regions_approx"],  # regions from grid cells (see _regions)
         "runs": {k: {"count": v[0], "length_mm": v[1], "wall_mm": v[3], "types": v[2].most_common()}
                  for k, v in classes.items()},
         "extruding_points": int(ext.sum()),
@@ -168,27 +216,17 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     into regions (connected within R). Returns (total ungrounded mm, regions sorted by size)."""
     ei = np.nonzero(ext & (layer >= 0))[0]
     if len(ei) == 0:
-        return 0.0, [], {"real_mm": 0.0, "wall_mm": 0.0}
+        return 0.0, [], {"real_mm": 0.0, "wall_mm": 0.0, "regions_approx": False}
     Q = P[ei]
     Ly = layer[ei]
     n = len(ei)
-    pairs = cKDTree(Q).query_pairs(R, output_type="ndarray")
-    a, b = pairs[:, 0], pairs[:, 1]
-    fwd = Ly[a] > Ly[b]
-    bwd = Ly[b] > Ly[a]
-    A = csr_matrix((np.ones(int(fwd.sum() + bwd.sum()), np.int8), (np.r_[a[fwd], b[bwd]], np.r_[b[fwd], a[bwd]])),
-                   shape=(n, n))
     run_id = np.cumsum(np.r_[1, (np.diff(ei) != 1) | (np.diff(Ly) != 0)])
     seg = np.r_[0, np.linalg.norm(np.diff(Q, axis=0), axis=1)] * (np.r_[0, np.diff(run_id)] == 0)
     s_along = np.cumsum(seg)
     g = np.zeros(n, bool)
-    order = np.argsort(Ly, kind="stable")
-    bounds = np.r_[0, np.cumsum(np.bincount(Ly - Ly.min()))]
-    for k in range(len(bounds) - 1):
-        idx = order[bounds[k]:bounds[k + 1]]
-        if len(idx) == 0:
-            continue
-        direct = (Q[idx, 2] < R) | (np.asarray(A[idx] @ g.astype(np.int8)).ravel() > 0)
+    grounded = _Earlier(R)  # grounded points of the layers done so far
+    for idx in _layer_order(Ly):
+        direct = (Q[idx, 2] < R) | grounded.any_within(Q[idx])
         gl = direct.copy()
         rid = run_id[idx]
         sa = s_along[idx]
@@ -197,6 +235,7 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
             dist = np.min(np.abs(sa[m][:, None] - sa[m & direct][None, :]), axis=1)
             gl[np.nonzero(m)[0]] |= dist <= reach
         g[idx] = gl
+        grounded.add(Q[idx[gl]])
     ug = ~g
     # path length each point stands for: half of the segments on either side of it within its run (points are ~0.5 mm
     # apart, so the old "count x seg_mm" understated the length)
@@ -207,9 +246,7 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     structural = np.isin(typ, STRUCTURAL)  # walls, skin: sparse infill floats a little even in flat prints
     real_mm = float(point_len[ug].sum())
     wall_mm = float(point_len[ug & structural].sum())
-    keep = ug[a] & ug[b]
-    C = csr_matrix((np.ones(int(keep.sum())), (a[keep], b[keep])), shape=(n, n))
-    _, lab = connected_components(C, directed=False)
+    lab, approx = _regions(Q, ug, R)
     regions = []
     for c in np.unique(lab[ug]):
         m = ug & (lab == c)
@@ -218,13 +255,52 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
                         "centre": [round(float(v), 1) for v in Q[m].mean(0)],
                         "types": Counter(types[i] for i in ei[m]).most_common(2)})
     regions.sort(key=lambda r: -r["mm"])
-    return float(ug.sum() * seg_mm), regions, {"real_mm": real_mm, "wall_mm": wall_mm}
+    return float(ug.sum() * seg_mm), regions, {"real_mm": real_mm, "wall_mm": wall_mm, "regions_approx": approx}
+
+
+def _regions(Q, ug, R, max_pairs=20_000_000):
+    """Region label per point: the ungrounded points `ug` connected within R. Returns (labels, approximate).
+
+    Exact (all pairs within R) unless that's more than max_pairs pairs, which happens when a bad mapping piles
+    thousands of points into one spot. Then the regions are the connected groups of occupied R-sized grid cells: every
+    pair within R is still connected, but regions a little more than R apart can merge."""
+    n = len(Q)
+    u = np.nonzero(ug)[0]
+    if len(u) == 0:
+        return np.arange(n), False
+    tree = cKDTree(Q[u])
+    if (tree.query_ball_point(Q[u], R, return_length=True).sum() - len(u)) // 2 <= max_pairs:
+        pairs = tree.query_pairs(R, output_type="ndarray")
+        C = csr_matrix((np.ones(len(pairs)), (u[pairs[:, 0]], u[pairs[:, 1]])), shape=(n, n))
+        return connected_components(C, directed=False)[1], False
+    cell = np.floor(Q[u] / R).astype(np.int64)
+    cell -= cell.min(0) - 1  # >= 1, so a neighbour offset of -1 stays >= 0
+    dims = cell.max(0) + 2
+    code = (cell[:, 0] * dims[1] + cell[:, 1]) * dims[2] + cell[:, 2]
+    keys, inv = np.unique(code, return_inverse=True)
+    a, b = [], []
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                nb = keys + (dx * dims[1] + dy) * dims[2] + dz
+                pos = np.minimum(np.searchsorted(keys, nb), len(keys) - 1)
+                hit = keys[pos] == nb
+                a.append(np.nonzero(hit)[0])
+                b.append(pos[hit])
+    a = np.concatenate(a)
+    b = np.concatenate(b)
+    _, cell_lab = connected_components(csr_matrix((np.ones(len(a)), (a, b)), shape=(len(keys),) * 2), directed=False)
+    lab = np.arange(n) + cell_lab.max() + 1  # grounded points: their own labels, unused
+    lab[u] = cell_lab[inv.reshape(-1)]
+    return lab, True
 
 
 def format_report(r):
     regs = r.get("regions", [])
     s = (f"[support] ungrounded (no support chain to the bed): {r.get('ungrounded_real_mm', 0):.0f} mm of extrusion in "
          f"{len(regs)} regions, {r.get('ungrounded_wall_mm', 0):.0f} mm of it walls/skin (the rest sparse infill)")
+    if r.get("regions_approx"):
+        s += "\n[support]   (thousands of points piled into the same spots, a sign of a bad mapping: regions approximate)"
     for g in regs[:3]:
         s += (f"\n[support]   ~{g['mm']:.0f} mm, layers {g['layers'][0]}-{g['layers'][1]}, at {g['centre']}, "
               f"{', '.join(f'{t} {n}' for t, n in g['types'])}")
