@@ -19,7 +19,10 @@ import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
+import numpy as np  # noqa: E402
+
 from s4 import quality  # noqa: E402
+from tools import shape_metrics  # noqa: E402
 
 MODELS = ["pi 3mm", "benchy upsidedown tilted", "Squirtle", "dino", "z mount 3mm", "B axis mount 5mm"]
 # regions where roughness matters most, in the part's real frame (x, y, z boxes)
@@ -28,7 +31,8 @@ REGIONS = {"pi 3mm": {"bridge_underside": ((-5, 5), (-5.5, 5.5), (9.5, 12.5))}}
 # the per-model metrics, in table-column order. Most are read from the run's "; s4:" header lines; tilt_deg,
 # along_axis and zigzag are computed in measure()
 METRICS = ("ungrounded_mm", "ungrounded_wall_mm", "island_wall_mm", "cantilever_wall_mm", "island_mm",
-           "cantilever_mm", "bridge_mm", "poles", "along_axis", "tilt_deg", "zigzag", "estimated_print_time_min")
+           "cantilever_mm", "bridge_mm", "poles", "along_axis", "tilt_deg", "zigzag", "estimated_print_time_min",
+           "outside_mm", "surface_rough_pct", "asym_mm")  # the last three: tools/shape_metrics.py
 
 # metric: (worse when, tolerance before it counts as a regression)
 # structure is judged on walls/skin; sparse infill floats a little even in a flat print (it is still reported)
@@ -69,6 +73,9 @@ def measure(model, gc, log=None, seconds=None):
                 "along_axis": int(m.group(1)) if m else (0 if log is not None else None),
                 "zigzag": r["count"]}
     res = {k: computed[k] if k in computed else num(k) for k in METRICS}
+    p0, p1 = quality.bead_segments(gc, num("NOZZLE_OFFSET", 42.0))
+    res.update(shape_metrics.measure(model, os.path.join(HERE, "input_models", f"{model}.stl"), r["mid"],
+                                     np.linalg.norm(p1 - p0, axis=1), r["rough"]))
     res.update(target_tilt_deg=num("deform.target_tilt_deg"), segments=r["segments"],
                seconds=round(seconds, 1) if seconds else None)
     for name, box in REGIONS.get(model, {}).items():
