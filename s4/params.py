@@ -25,6 +25,9 @@ DEFAULT_PARAMS = dict(
     # Mesh preparation (not in the notebook): coarsen needlessly fine surface tessellation before TetGen
     # (meshio_s4.simplify_surface). 0 = off, the notebook's mesh. ~1e-5 moves the surface ~0.01 mm
     SURFACE_SIMPLIFY_ERROR=0.0,
+    # Mesh density (not in the notebook): > 0 caps every tet's volume at this many mm^3 (TetGen -a), a finer mesh.
+    # 0 = off, TetGen's default mesh (the notebook's)
+    TET_MAX_VOLUME=0.0,
     # How the rotation field becomes a deformed mesh:
     #   "island_free" (default): fold-free fit + lifting of height minima that would print as floating islands
     #   "notebook": the notebook's least-squares solve (reproduces main.ipynb; folds and leaves islands)
@@ -43,6 +46,13 @@ DEFAULT_PARAMS = dict(
     LIFT_HOLD=0.2,                 # > 0: hold every vertex that was never in a pit at its fit-only height with a
                                    # two-sided spring (weight x LIFT_WEIGHT), so a pit's rim cannot be dragged up
     LIFT_HOLD_FALLOFF=0.0,         # mm (path length through the mesh): the hold ramps from 0 at the pit to full here
+    LIFT_SMOOTH=0,                 # > 0: after each lifting round, smooth the lift's displacement (vs the fit) by
+                                   # this many Laplacian passes over the vertex graph (fewer creases on lifted walls)
+    LIFT_TARGET_SMOOTH=0.0,        # mm, > 0: replace the lift targets by a smooth upper bound (largest requirement
+                                   # within this radius, then a Gaussian mean over it): no creases from the flood
+    LIFT_REFIT=0,                  # > 0: after the lift, build its extra rotations into the target rotations
+                                   # (smoothed over LIFT_REFIT_RADIUS), fit again and lift again; this many times
+    LIFT_REFIT_RADIUS=3.0,         # mm
     LIFT_PRECOND_FLOOR=0.3,        # PRECOND_FLOOR for the lifting solves only (< 0: same as the fit's). Lift
                                    # springs pull the whole mesh; without a floor the preconditioned step is huge at
                                    # vertices held only by micro-tets, and a dense micro-tet cluster gets torn apart

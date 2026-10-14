@@ -142,7 +142,8 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
                 part_offset, iters = expand_iterations(p)
                 support = sc.check(model_path, np.asarray(deformed.points), planar_path,
                                    part_offset=part_offset, retraction_length=retraction,
-                                   seg_size=mp["SEG_SIZE"], simplify_error=iters[0]["SURFACE_SIMPLIFY_ERROR"])
+                                   seg_size=mp["SEG_SIZE"], simplify_error=iters[0]["SURFACE_SIMPLIFY_ERROR"],
+                                   max_volume=iters[0]["TET_MAX_VOLUME"])
             stats["floating_points"] = support["floating_points"]
             log(sc.format_report(support))
     poles = quality.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"], retraction=retraction)

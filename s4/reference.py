@@ -205,7 +205,7 @@ def calculate_tet_attributes(tet):
     return tet, bottom_cells_mask, bottom_cells
 
 
-def run_cell2(model_path, PART_OFFSET=np.array([0., 0., 0.]), name=None, simplify_error=0.0):
+def run_cell2(model_path, PART_OFFSET=np.array([0., 0., 0.]), name=None, simplify_error=0.0, max_volume=0.0):
     """Cell 2: load mesh, tetrahedralize, neighbours, tet attributes."""
     global model_name, cell_neighbour_graph, cell_neighbour_dict, bottom_cells, bottom_cells_mask
     global bottom_cell_groups, input_tet, undeformed_tet
@@ -213,9 +213,10 @@ def run_cell2(model_path, PART_OFFSET=np.array([0., 0., 0.]), name=None, simplif
 
     with TIMER("load + tetgen"):
         # (the notebook's o3d read and TetGen calls; meshio_s4 only adds a cleanup retry when TetGen rejects the
-        # surface, and SURFACE_SIMPLIFY_ERROR when it is set)
+        # surface, SURFACE_SIMPLIFY_ERROR and TET_MAX_VOLUME when they are set)
         # convert to tetrahedral mesh
-        input_tet = meshio_s4.tetrahedralize(*meshio_s4.read_surface(model_path, simplify_error))
+        input_tet = meshio_s4.tetrahedralize(*meshio_s4.read_surface(model_path, simplify_error),
+                                             max_volume=max_volume)
 
     x_min, x_max, y_min, y_max, z_min, z_max = input_tet.bounds
     input_tet.points -= np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, z_min]) + PART_OFFSET
@@ -666,7 +667,8 @@ def deform(model_path, name, params, save_gif=False, verbose=2):
     from .params import expand_iterations
     part_offset, iterations = expand_iterations(params)
     with TIMER("cell 2: mesh setup"):
-        run_cell2(model_path, np.asarray(part_offset, dtype=float), name, iterations[0]["SURFACE_SIMPLIFY_ERROR"])
+        run_cell2(model_path, np.asarray(part_offset, dtype=float), name, iterations[0]["SURFACE_SIMPLIFY_ERROR"],
+                  iterations[0]["TET_MAX_VOLUME"])
 
     for it, p in enumerate(iterations):
         tag = f" [iteration {it + 1}/{len(iterations)}]" if len(iterations) > 1 else ""

@@ -146,7 +146,7 @@ def analyse(run_dir, model, sets=(), mp_over=None, verbose=True, flat=None):
     prof, _ = profiles.resolve(stl, sets=sets)
     p = profiles.deform_params(prof)
     off, iters = expand_iterations(p)
-    grid = meshio_s4.load_and_tetrahedralize(stl, off, iters[0]["SURFACE_SIMPLIFY_ERROR"])
+    grid = meshio_s4.load_and_tetrahedralize(stl, off, iters[0]["SURFACE_SIMPLIFY_ERROR"], iters[0]["TET_MAX_VOLUME"])
     cells = meshio_s4.cells_of(grid)
     in_pts = np.asarray(grid.points)
     in_c = np.asarray(grid.cell_centers().points)

@@ -48,13 +48,20 @@ def clean_surface(vertices, faces, snap=1e-3, min_height=1e-6, min_volume=1e-3):
     return v[used], f.reshape(-1, 3)
 
 
-def tetrahedralize(vertices, faces):
-    """TetGen with default switches. If TetGen rejects the surface (self-intersections), retry once on the
-    clean_surface version; meshes that tetrahedralize as they are never reach the cleanup."""
+def _tetgen_args(max_volume):
+    """TetGen's keyword arguments: none (default switches, the notebook's mesh) unless max_volume > 0, which caps
+    every tet's volume (mm^3; TetGen's -a switch): a finer mesh, surface triangles split where needed."""
+    return {"fixedvolume": True, "maxvolume": float(max_volume)} if max_volume and max_volume > 0 else {}
+
+
+def tetrahedralize(vertices, faces, max_volume=0.0):
+    """TetGen with default switches (plus a volume cap if max_volume > 0, _tetgen_args). If TetGen rejects the
+    surface (self-intersections), retry once on the clean_surface version; meshes that tetrahedralize as they are
+    never reach the cleanup."""
     t0 = time.time()
     try:
         tg = tetgen.TetGen(vertices, faces)
-        tg.tetrahedralize()
+        tg.tetrahedralize(**_tetgen_args(max_volume))
     except RuntimeError as e:
         for fn in ("_skipped.face", "_skipped.node"):  # TetGen's dump of the bad faces, written into the cwd
             if os.path.exists(fn) and os.path.getmtime(fn) >= t0 - 1:
@@ -63,7 +70,7 @@ def tetrahedralize(vertices, faces):
         print(f"[mesh] TetGen: {e} Retrying after removing degenerate triangles "
               f"({len(faces)} -> {len(f)} faces)", flush=True)
         tg = tetgen.TetGen(v, f)
-        tg.tetrahedralize()
+        tg.tetrahedralize(**_tetgen_args(max_volume))
     return tg.grid
 
 
@@ -98,9 +105,10 @@ def read_surface(model_path, simplify_error=0.0):
     return v, f
 
 
-def load_and_tetrahedralize(model_path, part_offset=(0., 0., 0.), simplify_error=0.0):
-    """Notebook cell 2 (first part): identical calls, so identical tetgen output (with simplify_error 0)."""
-    grid = tetrahedralize(*read_surface(model_path, simplify_error))
+def load_and_tetrahedralize(model_path, part_offset=(0., 0., 0.), simplify_error=0.0, max_volume=0.0):
+    """Notebook cell 2 (first part): identical calls, so identical tetgen output (with simplify_error and
+    max_volume 0)."""
+    grid = tetrahedralize(*read_surface(model_path, simplify_error), max_volume=max_volume)
     x_min, x_max, y_min, y_max, z_min, z_max = grid.bounds
     grid.points -= np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, z_min]) + np.asarray(part_offset, dtype=float)
     return grid

@@ -23,7 +23,7 @@ sys.path.insert(0, HERE)
 import numpy as np  # noqa: E402
 
 from s4 import quality  # noqa: E402
-from tools import shape_metrics  # noqa: E402
+from tools import layer_lines, shape_metrics  # noqa: E402
 
 MODELS = ["pi 3mm", "benchy upsidedown tilted", "Squirtle", "dino", "z mount 3mm", "B axis mount 5mm"]
 # regions where roughness matters most, in the part's real frame (x, y, z boxes)
@@ -95,6 +95,9 @@ def measure(model, gc, log=None, seconds=None):
         from tools.roughness_breakdown import waviness
         res["waviness"] = waviness(gc, planar, np.load(src), num("SEG_SIZE", 0.6), num("RETRACTION_LENGTH", 1.0),
                                    num("NOZZLE_OFFSET", 42.0))[0]
+    # layer lines on the visible outer surface (tools/layer_lines.py; regions there): needs the work dir
+    if os.path.exists(os.path.join(work, "deformed_points.npy")) and os.path.exists(os.path.join(work, "params_used.json")):
+        res.update(layer_lines.measure(model, work))
     for name, box in REGIONS.get(model, {}).items():
         mid = r["mid"]
         inside = (r["rough"] > 30)
@@ -117,7 +120,7 @@ def compare(res, base):
                 (how == "up_rel" and a > b * (1 + tol) + 5):
             bad.append(f"{k} {b:g} -> {a:g}")
     for k in res:
-        if k.startswith("zigzag_") and k in base and res[k] > base[k] * 1.1 + 3:
+        if k.startswith(("zigzag_", "layer_turns_")) and k in base and res[k] > base[k] * 1.1 + 3:
             bad.append(f"{k} {base[k]:g} -> {res[k]:g}")
     return bad, notes
 
@@ -159,6 +162,7 @@ def main():
             regressions += 1
             continue
         reg = " ".join(f"{k[7:]}={v}" for k, v in r.items() if k.startswith("zigzag_"))
+        reg += "".join(f" {k}={v}" for k, v in r.items() if k.startswith("layer_turns_"))
         print(f"{mdl:26s}" + "".join(f"{('-' if r.get(c) is None else f'{r[c]:g}'):>12s}" for c in cols) + f"  {reg}")
         if mdl in base and "error" not in base[mdl]:
             bad, notes = compare(r, base[mdl])

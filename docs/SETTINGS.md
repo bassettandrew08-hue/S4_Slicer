@@ -46,6 +46,7 @@ from it.
 | `MAX_POS_ROTATION`, `MAX_NEG_ROTATION` | ±360° | clamp on the target rotation |
 | `PART_OFFSET` | [0, 0, 0] | shift the part on the plate, in mm (subtracted) |
 | `SURFACE_SIMPLIFY_ERROR` | 0 (off) | not in the notebook. Coarsen needlessly fine surface triangles before TetGen (quadric error bound; `1e-5` ≈ 0.01 mm). For CAD exports that draw small holes with tiny segments: TetGen fills them with microscopic tets that the deformation tears apart. The log prints how far the surface moved. Whole run only, not per iteration |
+| `TET_MAX_VOLUME` | 0 (off) | not in the notebook. Caps every tet's volume at this many mm³ (TetGen `-a`): a finer mesh, surface triangles split where needed. The benchy's default mesh has a median tet of 0.27 mm³ (33k tets); 1 gives 45k, 0.5 67k, 0.25 122k. Used by the deformation, the reference port and the support check alike. Whole run only, not per iteration. It did not smooth the benchy's hull (CHANGELOG 2026-10-14) |
 | `ROTATION_ITERATIONS` | 100 | solver budget for the tilt field. Changing it changes the result, not just the speed |
 | `iterations` | (none) | multi-iteration schedule, see above |
 
@@ -66,6 +67,8 @@ from it.
 | `LIFT_ONE_SIDED` | true | only the pits are pushed up; earlier lift targets never pull a vertex back down |
 | `LIFT_HOLD` | 0.2 | every vertex that isn't in a pit is held where the fit put it, with this fraction of `LIFT_WEIGHT` (0 = off) |
 | `LIFT_HOLD_FALLOFF` | 0 | mm over which the hold ramps up with distance from a pit (fewer creases, but costs support on some models) |
+| `LIFT_REFIT` | 0 (off) | > 0: after the lift, the extra rotation it gave each tet (smoothed over `LIFT_REFIT_RADIUS` mm) is added to that tet's target rotation, the part is fitted again and lifted again; repeated this many times. Turns part of the lift into tilt, which a plain fit draws without creases. Changes Byrd's targets (not the field itself); about 50 s per pass on the benchy |
+| `LIFT_REFIT_RADIUS` | 3 | mm, `LIFT_REFIT` only |
 | `LIFT_PRECOND_FLOOR` | 0.3 | solver stiffness floor for the lift solves only (`-1` = use `PRECOND_FLOOR`) |
 | `BED_TOL` | 0.3 | mm; vertices this close to the lowest point count as the bed face, which is always supported |
 | `BED_PIN_WEIGHT` | 0 | > 0 also holds the bed face flat on the bed. Off by default: it costs tilt and support |

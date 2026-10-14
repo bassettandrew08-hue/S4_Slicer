@@ -37,7 +37,7 @@ from .params import DEFAULT_PARAMS
 # the deform settings this module reads; defaults, order and their explanations are in s4/params.py
 _KEYS = (
     "ISLAND_LIFT_SLOPE", "ISLAND_LIFT_ROUNDS", "LIFT_WEIGHT", "LIFT_ANCHOR", "LIFT_ONE_SIDED", "LIFT_HOLD",
-    "LIFT_HOLD_FALLOFF", "LIFT_PRECOND_FLOOR", "BARRIER_WEIGHT", "FLIP_FREE_STAGES", "FLIP_FREE_STAGE_ITERATIONS",
+    "LIFT_HOLD_FALLOFF", "LIFT_SMOOTH", "LIFT_TARGET_SMOOTH", "LIFT_REFIT", "LIFT_REFIT_RADIUS", "LIFT_PRECOND_FLOOR", "BARRIER_WEIGHT", "FLIP_FREE_STAGES", "FLIP_FREE_STAGE_ITERATIONS",
     "FIT_METHOD", "FOLD_PENALTY", "FOLD_PENALTY_DET", "PENALTY_ITERATIONS", "LIFT_ITERATIONS", "BED_PIN_WEIGHT",
     "BED_TOL", "SLIVER_QUALITY", "MICRO_TET_VOLUME", "PRECOND_FLOOR",
 )
@@ -156,6 +156,88 @@ def _hold_targets(V, nbrs, pit, held, weight, falloff):
     return idx, V[idx, 2].copy(), w, np.zeros(len(idx), bool)
 
 
+def _smooth_lift(V, V_fit, nbrs, fixed, n_iter):
+    """Smooth the lift's displacement V - V_fit over the vertex graph (Jacobi, uniform weights, half steps),
+    `fixed` vertices keep theirs."""
+    from scipy.sparse import csr_matrix
+    n = len(V)
+    a = np.repeat(np.arange(n), [len(x) for x in nbrs])
+    b = np.concatenate([np.asarray(x, np.int64) for x in nbrs])
+    deg = np.bincount(a, minlength=n).astype(float)
+    A = csr_matrix((1.0 / deg[a], (a, b)), shape=(n, n))
+    d = V - V_fit
+    keep = d[fixed].copy()
+    for _ in range(n_iter):
+        d = 0.5 * d + 0.5 * (A @ d)
+        d[fixed] = keep
+    return V_fit + d
+
+
+def _smooth_requirement(P, r, radius):
+    """A smooth upper bound of the lift requirement r >= 0 (per vertex): the largest r within `radius` mm (in the
+    undeformed part), then a Gaussian-weighted mean over the same radius. Every vertex's mean includes itself,
+    and its own r is within reach of every point it averages, so the result is never below r."""
+    from scipy.spatial import cKDTree
+    pos = np.nonzero(r > 0)[0]
+    out = np.zeros_like(r)
+    if not len(pos):
+        return out
+    tree = cKDTree(P)
+    near = tree.query_ball_point(P[pos], radius)
+    region = np.unique(np.concatenate([np.asarray(x, np.int64) for x in near]))  # where the dilation is > 0
+    dil = np.zeros_like(r)
+    for i, nb in zip(pos.tolist(), near):  # dilation: scatter each positive r onto its ball
+        nb = np.asarray(nb, np.int64)
+        dil[nb] = np.maximum(dil[nb], r[i])
+    near2 = tree.query_ball_point(P[region], radius)
+    sig2 = (radius / 2.0) ** 2
+    for v, nb in zip(region.tolist(), near2):
+        nb = np.asarray(nb, np.int64)
+        wgt = np.exp(-np.sum((P[nb] - P[v]) ** 2, axis=1) / (2 * sig2))
+        out[v] = float(np.dot(wgt, dil[nb]) / wgt.sum())
+    return out
+
+
+def _polar(J):
+    U, _, Wt = np.linalg.svd(J)
+    flip = np.linalg.det(U @ Wt) < 0
+    U[flip, :, 2] *= -1
+    return U @ Wt
+
+
+def _lift_rotations(R, V_fit, V, prob, cell_centers, radius):
+    """Target rotations with the lift built in: each tet's extra rotation from the lift (polar part of its
+    deformation gradient after the lift, relative to before), Gaussian-averaged (volume-weighted rotation vectors)
+    over `radius` mm of cell centres, applied on top of its target R. Tets the lift didn't move keep R."""
+    from scipy.spatial import cKDTree
+    c = prob.cells
+    moved = np.abs(V - V_fit).max(axis=1) > 1e-4
+    near = moved[c].any(axis=1)
+    if not near.any():
+        return R
+    tree = cKDTree(cell_centers)
+    region = np.unique(np.concatenate([np.asarray(x, np.int64) for x in
+                                       tree.query_ball_point(cell_centers[near], radius)]))
+    src = np.unique(np.concatenate([np.asarray(x, np.int64) for x in
+                                    tree.query_ball_point(cell_centers[region], radius)]))
+
+    def grad(X, idx):
+        return np.stack([X[c[idx, k]] - X[c[idx, 0]] for k in (1, 2, 3)], axis=2) @ prob.Dm_inv[idx]
+    D = _polar(grad(V, src)) @ np.transpose(_polar(grad(V_fit, src)), (0, 2, 1))
+    rv = np.zeros((len(cell_centers), 3))
+    rv[src] = Rotation.from_matrix(D).as_rotvec()
+    sig2 = (radius / 2.0) ** 2
+    out = np.array(R, copy=True)
+    nb_all = tree.query_ball_point(cell_centers[region], radius)
+    smooth = np.zeros((len(region), 3))
+    for k, nb in enumerate(nb_all):
+        nb = np.asarray(nb, np.int64)
+        wgt = prob.vol[nb] * np.exp(-np.sum((cell_centers[nb] - cell_centers[region[k]]) ** 2, axis=1) / (2 * sig2))
+        smooth[k] = wgt @ rv[nb] / wgt.sum()
+    out[region] = Rotation.from_rotvec(smooth).as_matrix() @ R[region]
+    return out
+
+
 def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     """Fold-free fit of the rotation field, then island lifting. Returns (new vertex positions, info dict)."""
     q = {**DEFAULTS, **{k: p[k] for k in DEFAULTS if k in p}}
@@ -188,7 +270,11 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     t_fit = time.perf_counter() - t0
     nbrs = vertex_graph(np.asarray(cells), len(P0))
     lifted = 0
-    if lift:
+    V_fit_of_lift = [None]
+
+    def lift_rounds(V):
+        """The island lift (rounds of pit targets, re-solved) from the fit V. Returns (V, iterations, lifted)."""
+        iters, lifted = 0, 0
         tgt = np.full(len(P0), -np.inf)
         w = np.full(len(P0), float(q["LIFT_WEIGHT"]))
         anchor = None
@@ -200,6 +286,7 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
         # no hold together with the bed pin: both fix z near the base and the lift squeezes the tets between them
         hold_w = np.full(len(P0), 0.0 if pin is not None else float(q["LIFT_HOLD"]) * float(q["LIFT_WEIGHT"]))
         V_fit = V.copy()
+        V_fit_of_lift[0] = V_fit
         held = np.ones(len(P0), bool)
         if anchor is not None:
             held[anchor[0]] = False
@@ -211,6 +298,9 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
             need = (h - V[:, 2]) > 0.02
             if not need.any():
                 break
+            if float(q["LIFT_TARGET_SMOOTH"]) > 0:
+                h = V[:, 2] + _smooth_requirement(P0, np.maximum(h - V[:, 2], 0.0), float(q["LIFT_TARGET_SMOOTH"]))
+                need = (h - V[:, 2]) > 0.02
             tgt = np.maximum(tgt, np.where(need, h, -np.inf))
             idx = np.nonzero(np.isfinite(tgt))[0].astype(np.int64)
             targets = (idx, tgt[idx], w[idx], np.full(len(idx), bool(q["LIFT_ONE_SIDED"])))
@@ -226,6 +316,25 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
                                lift=targets)
             iters += it
             lifted = len(idx)
+            if int(q["LIFT_SMOOTH"]) > 0:
+                V = _smooth_lift(V, V_fit, nbrs, anchor[0] if anchor is not None else bed, int(q["LIFT_SMOOTH"]))
+        return V, iters, lifted
+
+    if lift:
+        V, it, lifted = lift_rounds(V)
+        iters += it
+        for _ in range(int(q["LIFT_REFIT"]) if q["FIT_METHOD"] == "penalty" else 0):
+            # turn the lift into rotations: the extra rotation each tet got from the lift, smoothed over
+            # LIFT_REFIT_RADIUS, is added to its target; a plain fit of those targets has no creases, and the
+            # rounds after it only lift what that fit still leaves in a pit
+            R = _lift_rotations(R, V_fit_of_lift[0], V, prob, cell_centers, float(q["LIFT_REFIT_RADIUS"]))
+            prob.set_precond_floor(float(q["PRECOND_FLOOR"]))
+            V = prob.linear_start(R, pin)
+            V, it = prob.solve(R, V, int(q["PENALTY_ITERATIONS"]), lift=pin)
+            iters += it
+            V, it, lifted2 = lift_rounds(V)
+            iters += it
+            lifted = max(lifted, lifted2)
     seeds = island_seeds(V, nbrs, bed=_grounded(V, bed, tol=1.0))
     c = np.asarray(cells)
     J = np.stack([V[c[:, k]] - V[c[:, 0]] for k in (1, 2, 3)], axis=2) @ prob.Dm_inv

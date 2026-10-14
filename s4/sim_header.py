@@ -134,7 +134,8 @@ def s4_lines(model_name, profile, stats, deform_info=None, planar_source=None):
         for i, it in enumerate(deform["iterations"], 1):
             for k, v in it.items():
                 out.append(f"; s4: iteration_{i}.{k} = {_fmt_param(k, v)}")
-    out.append("; s4: tetrahedralize = default (no maxvolume)")
+    mv = iters[0].get("TET_MAX_VOLUME", 0.0)
+    out.append(f"; s4: tetrahedralize = maxvolume {mv:g}" if mv and mv > 0 else "; s4: tetrahedralize = default (no maxvolume)")
     for k, v in profile["map"].items():
         out.append(f"; s4: {k} = {_fmt_param(k, v)}")
     out.append(f"; s4: cura_config = {profile['cura']['config']}")
