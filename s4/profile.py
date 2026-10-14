@@ -53,12 +53,13 @@ MAP_DEFAULTS = dict(
     SAFE_TRAVEL_TRANSITIONS=True,
     # > 0: smoother mapping of the printed paths (mm, the blending radius; s4/fast_map.py smooth_mapping).
     # The per-tet linear map bends straight lines at tet faces; this blends the map over about this distance.
-    # 0 = off (the notebook's per-tet barycentric map). MAP_SMOOTH_MAX caps how far a point may move (mm)
-    MAP_SMOOTH=0,
+    # 0 = off (the notebook's per-tet barycentric map). MAP_SMOOTH_MAX caps how far a point may move (mm).
+    # Default 0.5 on branch smoothing: waviness -90..-98% on the six suite models, support unchanged (CHANGELOG)
+    MAP_SMOOTH=0.5,
     MAP_SMOOTH_MAX=0.2,
     # > 0: split print moves so none sweeps more than this many degrees of C. The machine moves C
     # and X linearly, so near the turntable axis a long C sweep is drawn as a curve. 0 = off
-    MAX_C_STEP=0,
+    MAX_C_STEP=3,
     # slow down any move that would drive an axis past these speeds (the notebook timed moves by the planar G-code
     # only, asking for thousands of deg/s on C and B). Placeholders: set your machine's real limits
     LIMIT_AXIS_SPEEDS=True,
@@ -86,7 +87,7 @@ CURA_DEFAULTS = dict(
 NOTEBOOK_EXACT = {"deform": {"DEFORMATION_METHOD": "notebook"},
                   "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False,
                           "SAFE_TRAVEL_TRANSITIONS": False, "LIMIT_AXIS_SPEEDS": False,
-                          "EXTRUSION_MULTIPLIER_RANGE": None},
+                          "EXTRUSION_MULTIPLIER_RANGE": None, "MAP_SMOOTH": 0, "MAX_C_STEP": 0},
                   "cura": {"strip_start_prime": False}}
 DEG_KEYS = {"MAX_POS_ROTATION", "MAX_NEG_ROTATION", "ROTATION_MAX_DELTA"}
 SECTIONS = ("deform", "map", "cura")
