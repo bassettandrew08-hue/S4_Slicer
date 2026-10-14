@@ -102,6 +102,15 @@ Each is on by default and off with `--notebook-exact` (see [Differences](#differ
 | `SPLIT_RETRACTIONS` | true | retract/unretract in place |
 | `SAFE_TRAVEL_TRANSITIONS` | true | lower the nozzle after a travel that left the part, before printing |
 
+### Smoother paths (opt-in, `--impl fast` only)
+Off by default; `--impl reference` ignores them. Measurements are in the [CHANGELOG](../CHANGELOG.md).
+
+| setting | default | what it does |
+|---|---|---|
+| `MAP_SMOOTH` | 0 (off) | mm. The deformation is linear per tet, so a straight planar line bends wherever it crosses a tet face (wavy walls). > 0 re-estimates the mapping at every printed point by a local linear fit over its neighbours on the same printed run, Gaussian-weighted over this distance. Affine maps, corners and curves are kept exactly; only the bends at tet faces are blended. 1.0 is a good value |
+| `MAP_SMOOTH_MAX` | 0.2 | mm, the most `MAP_SMOOTH` may move a point (typical moves are 0.01-0.02 mm) |
+| `MAX_C_STEP` | 0 (off) | degrees. The machine moves C and X linearly, so near the turntable axis a print move that sweeps a large C angle comes out curved, and the path kinks where moves meet. > 0 splits print moves so none sweeps more than this. 3 is a good value |
+
 ### Machine limits
 | setting | default | what it does |
 |---|---|---|

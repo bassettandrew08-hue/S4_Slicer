@@ -118,6 +118,8 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
             retraction = mp["RETRACTION_LENGTH"]
             if impl == "reference":
                 from . import reference as ref
+                if mp.get("MAP_SMOOTH") or mp.get("MAX_C_STEP"):
+                    log("[map] MAP_SMOOTH / MAX_C_STEP are only implemented in --impl fast; ignored here")
                 pts, stats = ref.map_gcode(input_tet, deformed, planar_path, mp)
                 with TIMER("write G-code"):
                     ref.write_gcode(pts, out_gcode, NOZZLE_OFFSET=mp["NOZZLE_OFFSET"])

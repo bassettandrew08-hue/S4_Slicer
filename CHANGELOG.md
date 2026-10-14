@@ -6,6 +6,7 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 `benchy upsidedown tilted` (33,156 tets) and `pi 3mm` models with default settings, unless noted.
 
 **Entries**
+- [2026-10-14: Where the path roughness comes from; opt-in smoother mapping](#2026-10-14-where-the-path-roughness-comes-from-opt-in-smoother-mapping)
 - [2026-10-07: Meshes with CAD-export junk, support check on large prints](#2026-10-07-meshes-with-cad-export-junk-support-check-on-large-prints)
 - [2026-10-01: Smoother lifted surfaces, six-model quality suite](#2026-10-01-smoother-lifted-surfaces-six-model-quality-suite)
 - [2026-10-01: Bug fixes, cleanup, path-roughness view](#2026-10-01-bug-fixes-cleanup-path-roughness-view)
@@ -17,6 +18,65 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 - [2026-09-27: Island-free deformation](#2026-09-27-island-free-deformation)
 - [2026-09-26: Output fixes, build profiles, docs](#2026-09-26-output-fixes-build-profiles-docs)
 - [2026-09-25: Headless pipeline](#2026-09-25-headless-pipeline)
+
+---
+
+## 2026-10-14: Where the path roughness comes from; opt-in smoother mapping
+
+### Diagnosis (`tools/roughness_breakdown.py`, six models, default settings)
+Every rough bead segment (the suite's `zigzag`) traced back to the planar point it came from:
+
+| model | zigzag | rough in Cura's planar path too | planar corner + mapping | tet face / rotation split / other mapping | flat print of the undeformed model, same spots rough |
+|---|---|---|---|---|---|
+| pi | 213 | 195 | 18 | 0 | 14 |
+| benchy | 5228 | 4163 | 800 | 265 | 2957 |
+| Squirtle | 2134 | 1841 | 231 | 62 | 1341 |
+| dino | 3163 | 3019 | 116 | 28 | 2074 |
+| z mount | 1387 | 1183 | 157 | 47 | 336 |
+| B axis mount | 3542 | 3027 | 454 | 61 | 983 |
+| **all** | **15667** | **13428 (86%)** | **1776 (11%)** | **463 (3%)** | **7705 (49%)** |
+
+- About half of the count is the model's own geometry as Cura draws it: small fillets drawn with 2-3 segments
+  turning 30-45 deg each, skin outlines, infill ends. A flat print of the undeformed STL is rough at the same spots
+  (flat-print totals: benchy 4679, Squirtle 2310, dino 2763, z mount 1537, B axis 1244, pi 10).
+- Most of the rest is also already in Cura's planar path, but only because of the deformed shape (B axis mount and
+  pi above all): contours where a layer grazes a nearly flat deformed surface, tiny closed loops at the tops of bumps.
+- The mapping itself adds little above 30 deg. Below it, it makes the walls wavy: where the planar path runs
+  straight, 5% of the joints of the final path turn more than 5 deg (z mount: 9837 of 191240). Two causes:
+  the per-tet linear map bends lines at tet faces, and the machine moves C and X linearly, so near the turntable
+  axis a move that sweeps several degrees of C is drawn as a curve (almost all turns > 10 deg are within 5 mm of
+  the axis).
+- Cura's `meshfix_maximum_deviation` 0.01 (profile: 0.025) draws curves with more, gentler segments: zigzag
+  benchy 5228 -> 4853, Squirtle 2134 -> 1659, dino 3163 -> 2539, z mount 1387 -> 1185, B axis 3542 -> 2442, but
+  pi 213 -> 267 (bridge underside 31 -> 41) and z mount ungrounded walls 0.3 -> 2.7 mm. Not adopted; it is a
+  `--cura-set` away for the models it helps. 0.005 and 0.05 are both worse than 0.01.
+
+### Added (opt-in, `--impl fast` only, off by default: no output change)
+- **`MAP_SMOOTH`** (mm) and **`MAP_SMOOTH_MAX`**: the displacement at every printed point is re-fitted by a local
+  linear fit over its neighbours on the same printed run (`s4/fast_map.py smooth_mapping`). Affine maps, corners
+  and curves are reproduced exactly; only the bends at tet faces are blended. Points move 0.005-0.02 mm on average.
+- **`MAX_C_STEP`** (deg): print moves are split so none sweeps more than this much C.
+- **`tools/roughness_breakdown.py`**: the breakdown above, plus the "wobble" (turns of the final path where the
+  planar path is straight). **`tools/model_suite.py --sliced-from DIR`** reuses an earlier run's planar G-code, for
+  clean comparisons of map-only settings.
+
+Six models on the same planar G-code (`--sliced-from`), zigzag / surface_rough_pct:
+
+| model | default | `MAP_SMOOTH` 0.5, `MAX_C_STEP` 3 | `MAP_SMOOTH` 1.0 (max 0.5), `MAX_C_STEP` 3 |
+|---|---|---|---|
+| pi (bridge underside) | 213 (31) / 0.17 | 195 (22) / 0.16 | 200 (22) / 0.16 |
+| benchy | 5228 / 1.22 | 4628 / 1.06 | 4680 / 1.08 |
+| Squirtle | 2134 / 0.84 | 2030 / 0.80 | 2040 / 0.80 |
+| dino | 3163 / 1.24 | 3159 / 1.24 | 3111 / 1.22 |
+| z mount | 1387 / 0.42 | 1290 / 0.39 | 1306 / 0.39 |
+| B axis mount | 3542 / 1.26 | 3555 / 1.25 | 3616 / 1.28 |
+
+Wobble (joints turning > 5 / > 10 deg where the planar path is straight), z mount: 9837 / 2514 by default,
+6178 / 1450 with `MAP_SMOOTH` 1.0 alone, 5771 / 1149 with `MAX_C_STEP` 3 alone, 527 / 40 with both. B axis mount
+with `MAP_SMOOTH` 0.5 + `MAX_C_STEP` 3: 1757 / 231. Support numbers, poles and along-axis are unchanged (the support
+check maps the planar path itself); print time +0.5-0.8 min. One problem: with `MAP_SMOOTH` 0.5 Squirtle has one
+0.5 mm segment 1.5 mm outside the part (`outside_mm` 0 -> 0.5), not seen with 1.0; not investigated yet, so neither
+is the default.
 
 ---
 

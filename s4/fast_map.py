@@ -12,6 +12,7 @@ What changed vs. the notebook (all output-preserving):
   * the stateful smoothing/interpolation loop runs on plain Python floats
   * output lines are formatted with the same format specs and written in one go
 """
+import math
 import re
 
 import numpy as np
@@ -219,6 +220,11 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
         else:
             squish_all = z_squish_scales[containing]
 
+    if mp.get("MAP_SMOOTH", 0) and mp["MAP_SMOOTH"] > 0:
+        with TIMER("smooth mapping (MAP_SMOOTH)"):
+            new_pos_all = smooth_mapping(P, new_pos_all, bary_ok, g, mp["RETRACTION_LENGTH"], float(mp["MAP_SMOOTH"]),
+                                         float(mp.get("MAP_SMOOTH_MAX", 0.2)))
+
     with TIMER("sequential smoothing loop"):
         out = _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp)
     stats = {
@@ -228,6 +234,62 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
         "bad_barycentric_sum": int((~bary_ok).sum()),
     }
     return out, stats
+
+
+SMOOTH_STATS = {}  # diagnostics of the last smooth_mapping call
+
+
+def smooth_mapping(P, mapped, ok, g, retraction, sigma, max_shift, window=12, chunk=100000):
+    """MAP_SMOOTH: a smoother map for the printed paths (opt-in; fast path only).
+
+    The deformation is linear per tet, so a straight planar line maps to a polyline that kinks wherever it crosses a
+    tet face. Here the displacement D = P - mapped is re-estimated at every printed point by a local linear fit
+    D ~ a + B (xy - xy_i) over its neighbours along the same printed run (same layer, no travel in between),
+    Gaussian-weighted by in-plane distance (sigma mm). A linear fit reproduces an affine map exactly, so curves and
+    corners of the planar path keep their shape; only the jumps of the gradient at tet faces are blended over about
+    sigma. The change per point is capped at max_shift mm. Points outside the mesh (not ok) are neither used nor
+    moved."""
+    n = len(P)
+    if n < 3:
+        return mapped
+    ext = np.array([np.nan if e is None else e for e in g["extrusion"]], dtype=float)
+    printing = np.array([c == "G01" for c in g["command"]]) & (ext > 0) & (ext != retraction)
+    member = printing | np.r_[printing[1:], False]  # printed points and the start point of each printed run
+    run = np.cumsum(~printing)  # a run's start point (a travel end) shares the id of the moves printed from it
+    D = P - mapped
+    out = D.copy()
+    use = member & ok
+    offs = np.arange(-window, window + 1)
+    xy = P[:, :2]
+    inv2s2 = 0.5 / sigma ** 2
+    for c0 in range(0, n, chunk):
+        i = np.arange(c0, min(n, c0 + chunk))
+        i = i[use[i]]
+        if not len(i):
+            continue
+        j = i[:, None] + offs[None, :]
+        inr = (j >= 0) & (j < n)
+        j = np.clip(j, 0, n - 1)
+        valid = inr & use[j] & (run[j] == run[i][:, None]) & (P[j, 2] == P[i, 2][:, None])
+        dx = xy[j] - xy[i][:, None, :]
+        w = np.exp(-np.einsum("ijk,ijk->ij", dx, dx) * inv2s2) * valid
+        X = np.concatenate([np.ones(dx.shape[:2] + (1,)), dx], axis=2)  # (m, k, 3)
+        A = np.einsum("ij,ijk,ijl->ikl", w, X, X)
+        lam = 1e-3 * sigma ** 2 * w.sum(1) + 1e-12
+        A[:, 1, 1] += lam
+        A[:, 2, 2] += lam
+        b = np.einsum("ij,ijk,ijl->ikl", w, X, D[j])
+        a = np.linalg.solve(A, b)[:, 0, :]
+        out[i] = a
+    shift = out - D
+    s = np.linalg.norm(shift, axis=1)
+    big = s > max_shift
+    shift[big] *= (max_shift / s[big])[:, None]
+    SMOOTH_STATS.clear()
+    SMOOTH_STATS.update(points=int(use.sum()), mean_shift_mm=round(float(s[use].mean()), 4) if use.any() else 0.0,
+                        p99_shift_mm=round(float(np.percentile(s[use], 99)), 4) if use.any() else 0.0,
+                        capped=int(big.sum()))
+    return mapped - shift
 
 
 def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
@@ -248,6 +310,7 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
     ALPHA = mp["ROTATION_AVERAGING_ALPHA"]
     RET = mp["RETRACTION_LENGTH"]
     MAXD = mp["ROTATION_MAX_DELTA"]
+    CSTEP = math.radians(mp.get("MAX_C_STEP", 0) or 0)  # 0 = off
     MAXE = mp["MAX_EXTRUSION_MULTIPLIER"]
     SPLIT = mp["SPLIT_RETRACTIONS"]
     MRANGE = mp["EXTRUSION_MULTIPLIER_RANGE"]
@@ -264,8 +327,12 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
     squish = squish_all.tolist()
 
     o_pos, o_rot, o_cmd, o_ext, o_inv, o_trav, o_feed, o_eonly = [], [], [], [], [], [], [], []
+    o_src, o_kind = [], []  # per output move: planar point index, and kind (diagnostics only, never written)
+    cur = [0, 0]
 
     def emit(pos, rot, cmd, ext, inv, trav, feed, e_only=False):
+        o_src.append(cur[0])
+        o_kind.append(3 if e_only else cur[1])
         o_pos.append(pos)
         o_rot.append(rot)
         o_cmd.append(cmd)
@@ -284,6 +351,7 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
     lost = 0
 
     for i in range(len(commands)):
+        cur[0], cur[1] = i, 0
         command = commands[i]
         inv_time_feed = inv_feeds[i]
         extrusion = extrusions[i]
@@ -343,14 +411,35 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
             else:
                 emit(tuple(new_position), rotation, "G01", extrusion, None, prev_travelling, feeds[i], True)
 
-        if prev_new_position is not None and abs(rotation - prev_rotation) > MAXD:
+        n_c = 1
+        if CSTEP and prev_new_position is not None and motion_extrusion is not None and motion_extrusion > 0:
+            # MAX_C_STEP: the machine moves C and X linearly, so near the turntable axis a move that sweeps a large
+            # C angle is drawn as a curve; split it so every step sweeps at most CSTEP
+            dth = math.atan2(new_position[1], new_position[0]) - math.atan2(prev_new_position[1], prev_new_position[0])
+            dth = abs((dth + math.pi) % (2 * math.pi) - math.pi)
+            if dth > CSTEP:
+                n_c = int(dth / CSTEP) + 1
+        if prev_new_position is not None and n_c > 1 and abs(rotation - prev_rotation) <= MAXD:
+            cur[1] = 4  # C-split steps
+            dx = new_position[0] - prev_new_position[0]
+            dy = new_position[1] - prev_new_position[1]
+            dz = new_position[2] - prev_new_position[2]
+            dr = rotation - prev_rotation
+            e_i = motion_extrusion / n_c
+            f_i = inv_time_feed * n_c if inv_time_feed is not None else None
+            for k in range(n_c):
+                s = (k + 1) / n_c
+                emit((prev_new_position[0] + dx * s, prev_new_position[1] + dy * s, prev_new_position[2] + dz * s),
+                     prev_rotation + dr * s, move_command, e_i, f_i, travelling, feeds[i])
+        elif prev_new_position is not None and abs(rotation - prev_rotation) > MAXD:
             delta_rotation = rotation - prev_rotation
-            n = int(abs(delta_rotation) / MAXD) + 1
+            n = max(int(abs(delta_rotation) / MAXD) + 1, n_c)
             dx = new_position[0] - prev_new_position[0]
             dy = new_position[1] - prev_new_position[1]
             dz = new_position[2] - prev_new_position[2]
             e_i = motion_extrusion / n if motion_extrusion is not None else None
             f_i = inv_time_feed * n if inv_time_feed is not None else None
+            cur[1] = 1  # rotation-split steps
             for k in range(n):
                 s = (k + 1) / n
                 emit((prev_new_position[0] + dx * s, prev_new_position[1] + dy * s, prev_new_position[2] + dz * s),
@@ -359,6 +448,7 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
         else:
             emit(tuple(new_position), rotation, move_command, motion_extrusion, inv_time_feed, travelling, feeds[i])
 
+        cur[1] = 2
         if reentry is not None and reentry[2] != new_position[2]:  # lower to the true height, as a travel
             emit(tuple(reentry), rotation, "G00", None, None, travelling, feeds[i])
             new_position = reentry
@@ -378,7 +468,8 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
             highest_printed_point = max(highest_printed_point, new_position[2])
 
     return {"position": o_pos, "rotation": o_rot, "command": o_cmd, "extrusion": o_ext,
-            "inv_time_feed": o_inv, "travelling": o_trav, "feed": o_feed, "e_only": o_eonly, "_lost": lost}
+            "inv_time_feed": o_inv, "travelling": o_trav, "feed": o_feed, "e_only": o_eonly, "_lost": lost,
+            "src": o_src, "kind": o_kind}
 
 
 def write_gcode(pts, out_path, NOZZLE_OFFSET=42):

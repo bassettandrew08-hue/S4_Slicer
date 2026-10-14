@@ -41,10 +41,12 @@ CHECKS = {"ungrounded_mm": ("up_rel", 0.5), "ungrounded_wall_mm": ("up", 1.0), "
           "tilt_deg": ("down", 2.0)}
 
 
-def run_model(model, out, extra, python):
+def run_model(model, out, extra, python, sliced_from=None):
     gc = os.path.join(out, f"{model}.gcode")
     args = [python, os.path.join(HERE, "s4_slice.py"), os.path.join(HERE, "input_models", f"{model}.stl"),
             "-o", gc, "--work-dir", os.path.join(out, model)] + extra
+    if sliced_from:  # map-only changes: reuse that run's planar G-code (CuraEngine isn't deterministic)
+        args += ["--sliced-gcode", os.path.join(sliced_from, model, f"{model}_deformed_tet.gcode")]
     t = time.time()
     p = subprocess.run(args, cwd=HERE, capture_output=True, text=True, errors="replace")
     log = p.stdout + p.stderr
@@ -113,6 +115,7 @@ def main():
     ap.add_argument("--models", nargs="*", default=MODELS)
     ap.add_argument("--baseline", help="a previous --out directory to compare with")
     ap.add_argument("--jobs", type=int, default=6)
+    ap.add_argument("--sliced-from", help="reuse the planar G-code of this earlier --out (for map-only settings)")
     ap.add_argument("--measure-only", action="store_true", help="don't slice: re-measure the G-code already in --out")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -125,7 +128,7 @@ def main():
             results[mdl] = measure(mdl, gc, log)
     else:
         with cf.ThreadPoolExecutor(a.jobs) as ex:
-            for mdl, res in ex.map(lambda m: run_model(m, a.out, extra, sys.executable), a.models):
+            for mdl, res in ex.map(lambda m: run_model(m, a.out, extra, sys.executable, a.sliced_from), a.models):
                 results[mdl] = res
     json.dump({"settings": a.set, "cura_settings": a.cura_set, "results": results},
               open(os.path.join(a.out, "summary.json"), "w"), indent=1)
