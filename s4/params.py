@@ -29,6 +29,13 @@ DEFAULT_PARAMS = dict(
     #   "island_free" (default): fold-free fit + lifting of height minima that would print as floating islands
     #   "notebook": the notebook's least-squares solve (reproduces main.ipynb; folds and leaves islands)
     DEFORMATION_METHOD="island_free",
+    # Mirror symmetry (not in the notebook; s4/symmetry.py): null = off. An angle (deg) = the normal of a vertical
+    # mirror plane through the part's surface centroid, a list of angles, or "auto" to search for them
+    SYMMETRY_PLANE=None,
+    SYMMETRY_MODE="both",          # "field": average the rotation field with its mirror (changes Bird's field);
+                                   # "vertices": average the deformed vertices with their mirror (after the
+                                   # fit, before the lift); "both"
+    SYMMETRY_TOLERANCE=0.5,        # mm: mirrored points this far outside the part are not averaged (ramp from 0)
     # ---- island_free (s4/island_free.py; its module docstring explains the fit and the lift)
     ISLAND_LIFT_SLOPE=0.5,         # mm of rise per mm from the bed; 0.5 ~ overhangs up to ~63 deg from vertical
                                    # in deformed space

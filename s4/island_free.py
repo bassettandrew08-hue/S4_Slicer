@@ -156,8 +156,9 @@ def _hold_targets(V, nbrs, pit, held, weight, falloff):
     return idx, V[idx, 2].copy(), w, np.zeros(len(idx), bool)
 
 
-def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
-    """Fold-free fit of the rotation field, then island lifting. Returns (new vertex positions, info dict)."""
+def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None, post_fit=None):
+    """Fold-free fit of the rotation field, then island lifting. Returns (new vertex positions, info dict).
+    post_fit: optional V -> V applied between the fit and the lifting (the SYMMETRY_PLANE vertex average)."""
     q = {**DEFAULTS, **{k: p[k] for k in DEFAULTS if k in p}}
     t0 = time.perf_counter()
     P0 = np.asarray(points, dtype=np.float64)
@@ -185,6 +186,8 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
             iters += it
     else:
         raise ValueError(f"unknown FIT_METHOD {q['FIT_METHOD']!r} (use 'penalty' or 'barrier')")
+    if post_fit is not None:
+        V = post_fit(V)
     t_fit = time.perf_counter() - t0
     nbrs = vertex_graph(np.asarray(cells), len(P0))
     lifted = 0

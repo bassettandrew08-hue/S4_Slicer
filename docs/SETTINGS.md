@@ -72,6 +72,15 @@ from it.
 | `FLIP_FREE_STAGES`, `FLIP_FREE_STAGE_ITERATIONS`, `BARRIER_WEIGHT` | 10, 150, 0.02 | `barrier` only: tilt ramp stages and barrier strength |
 | `SLIVER_QUALITY`, `MICRO_TET_VOLUME` | 0.03, 1e-3 | `barrier` only: badly shaped or tiny tets get no barrier (they would stall it) |
 
+### Mirror symmetry (opt-in)
+For (nearly) mirror-symmetric parts: TetGen's mesh is not symmetric, so the tilt field and the deformed shape aren't
+either, and the two halves print with differently shaped curved layers. `s4/symmetry.py`, `--impl fast` only.
+| setting | default | what it does |
+|---|---|---|
+| `SYMMETRY_PLANE` | null (off) | normal angle (deg, in the xy plane) of a vertical mirror plane through the part's surface centroid, a list of angles, or `"auto"`: every plane whose mirrored surface lies within 0.25 mm (median) of the surface (dino 3.2°, benchy 89.4°, pi 3mm both 0° and 90°; none on Squirtle, z mount, B axis mount) |
+| `SYMMETRY_MODE` | `both` | `vertices`: after the fit and before the island lift, each deformed vertex is averaged with the mirror image of the deformation at its mirrored point (weights halved wherever that would squash or fold a tet); `field`: each tet's tilt is averaged with the tilt at its mirrored centroid — **this changes Joshua Bird's rotation field**; `both` |
+| `SYMMETRY_TOLERANCE` | 0.5 | mm: where the mirrored point lies outside the part (unmirrored details), the average fades out over this distance |
+
 The four `LIFT_ANCHOR` / `LIFT_ONE_SIDED` / `LIFT_HOLD` / `LIFT_PRECOND_FLOOR` switches together are the "anchored,
 pit-only" lift. The old lift is `LIFT_ANCHOR=0 LIFT_ONE_SIDED=false LIFT_HOLD=0 LIFT_PRECOND_FLOOR=-1`. Why the new
 one is the default, with numbers, is in the
@@ -136,7 +145,8 @@ Whatever the profile says, these are always enforced, because the mapper depends
 This is also the answer to "which setting turns on which fix". All of these are on by default. `--notebook-exact`
 turns every one of them off and reproduces the notebook's output byte for byte (everything after the
 [settings block](../S4_PIPELINE.md#the-settings-block-at-the-top-of-the-g-code)). The rotation (tilt) field is the
-notebook's in every case.
+notebook's in every case, except with the opt-in `SYMMETRY_PLANE` and `SYMMETRY_MODE` `field` or `both`
+([mirror symmetry](#mirror-symmetry-opt-in)), which averages it with its mirror image.
 
 | what | setting | difference |
 |---|---|---|

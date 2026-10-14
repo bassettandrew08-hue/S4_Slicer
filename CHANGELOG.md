@@ -6,6 +6,7 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 `benchy upsidedown tilted` (33,156 tets) and `pi 3mm` models with default settings, unless noted.
 
 **Entries**
+- [2026-10-14: Mirror-symmetric curved layers (opt-in)](#2026-10-14-mirror-symmetric-curved-layers-opt-in)
 - [2026-10-07: Meshes with CAD-export junk, support check on large prints](#2026-10-07-meshes-with-cad-export-junk-support-check-on-large-prints)
 - [2026-10-01: Smoother lifted surfaces, six-model quality suite](#2026-10-01-smoother-lifted-surfaces-six-model-quality-suite)
 - [2026-10-01: Bug fixes, cleanup, path-roughness view](#2026-10-01-bug-fixes-cleanup-path-roughness-view)
@@ -17,6 +18,43 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 - [2026-09-27: Island-free deformation](#2026-09-27-island-free-deformation)
 - [2026-09-26: Output fixes, build profiles, docs](#2026-09-26-output-fixes-build-profiles-docs)
 - [2026-09-25: Headless pipeline](#2026-09-25-headless-pipeline)
+
+---
+
+## 2026-10-14: Mirror-symmetric curved layers (opt-in)
+
+### Where the asymmetry comes from
+Measured on the three (nearly) symmetric suite models. `layer_asym` (new suite column, `tools/shape_metrics.py`) is
+the 90th percentile of |deformed height at p - deformed height at mirror(p)| over the printed points: how far a
+curved layer on one side is from its mirror image on the other.
+- **The deformation, more than the tilt field.** The field's mirror mismatch is small (pi: mean 1.3 deg, 90th pct
+  2.6 deg; dino 1.6 / 3.4 deg; benchy 3.7 / 8.9 deg, where its details differ), but the fit of it on TetGen's
+  asymmetric mesh is not: pi 3mm's deformed shape leans ~1 deg about y (0.74 mm layer mismatch between its legs,
+  about its 0 deg plane; 0.05 mm about the 90 deg plane), dino 1.07 mm, benchy 0.30 mm. Averaging only the field
+  (`field` mode) leaves dino at 1.06 mm and benchy at 0.21 mm.
+- **`asym_mm` mostly measures Cura's infill.** It looks at the union of all layers, so the walls (the part's
+  surface) are symmetric anyway; its 90th percentile is set by the gyroid infill, which is not mirror-symmetric. A
+  flat Cura slice of the undeformed pi 3mm scores 0.67 (walls 0.09, infill 1.57); with `infill_pattern=lines` 0.13.
+  Split of the S4 output: pi walls 0.15 / interior 1.40, benchy 0.26 / 1.05, dino 0.27 / 1.99. No deformation
+  change moves this metric much; `layer_asym` is the one that measures the curved layers.
+
+### Added
+- **`SYMMETRY_PLANE`** (deform, default null = off), `SYMMETRY_MODE` (`both`), `SYMMETRY_TOLERANCE` (0.5 mm):
+  `s4/symmetry.py`, `--impl fast` only (the reference raises). See
+  [SETTINGS](docs/SETTINGS.md#mirror-symmetry-opt-in). `field` and `both` change Joshua Bird's rotation field.
+- `layer_asym_mm` in the suite; `asym_mm` now uses the exact surface centroid (the random-sample centroid moved the
+  plane ~0.02 mm between runs: the same G-code scored 0.438 and 0.478).
+
+| model | layer_asym base -> `SYMMETRY_PLANE=auto` | support walls (ungrounded / island / cantilever) |
+|---|---|---|
+| pi 3mm (planes 0 and 90 deg) | 0.048 -> 0.017 (0 deg plane: 0.74 -> 0.105) | 0/0/0 -> 0/0/0; zigzag 213 -> 298 (top skin), bridge_underside 31 -> 35 |
+| benchy upsidedown tilted | 0.304 -> 0.098 | 21.9/10.5/1.0 -> 22.5/10.8/0 |
+| dino | 1.072 -> 0.454 | 4.9/8.4/24.5 -> 1.9/2.7/25.1 |
+| Squirtle, z mount, B axis mount | no plane found, unchanged | unchanged |
+
+Opt-in, not default: benchy's ungrounded and island walls are slightly up (within the suite's tolerance), dino's
+cantilever walls too, and pi's roughness count rises: removing the lean leaves its top bar level with the slicing
+planes, and Cura's top skin there zig-zags more (z 18-20 mm: 116 -> 193 sharp turns).
 
 ---
 

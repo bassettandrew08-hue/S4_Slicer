@@ -32,7 +32,7 @@ REGIONS = {"pi 3mm": {"bridge_underside": ((-5, 5), (-5.5, 5.5), (9.5, 12.5))}}
 # along_axis and zigzag are computed in measure()
 METRICS = ("ungrounded_mm", "ungrounded_wall_mm", "island_wall_mm", "cantilever_wall_mm", "island_mm",
            "cantilever_mm", "bridge_mm", "poles", "along_axis", "tilt_deg", "zigzag", "estimated_print_time_min",
-           "outside_mm", "surface_rough_pct", "asym_mm")  # the last three: tools/shape_metrics.py
+           "outside_mm", "surface_rough_pct", "asym_mm", "layer_asym_mm")  # the last four: tools/shape_metrics.py
 
 # metric: (worse when, tolerance before it counts as a regression)
 # structure is judged on walls/skin; sparse infill floats a little even in a flat print (it is still reported)
@@ -75,7 +75,8 @@ def measure(model, gc, log=None, seconds=None):
     res = {k: computed[k] if k in computed else num(k) for k in METRICS}
     p0, p1 = quality.bead_segments(gc, num("NOZZLE_OFFSET", 42.0))
     res.update(shape_metrics.measure(model, os.path.join(HERE, "input_models", f"{model}.stl"), r["mid"],
-                                     np.linalg.norm(p1 - p0, axis=1), r["rough"]))
+                                     np.linalg.norm(p1 - p0, axis=1), r["rough"],
+                                     work_dir=os.path.join(os.path.dirname(gc), model)))
     res.update(target_tilt_deg=num("deform.target_tilt_deg"), segments=r["segments"],
                seconds=round(seconds, 1) if seconds else None)
     for name, box in REGIONS.get(model, {}).items():

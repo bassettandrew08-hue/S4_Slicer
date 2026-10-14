@@ -664,6 +664,8 @@ def deform(model_path, name, params, save_gif=False, verbose=2):
     global undeformed_tet
     from .params import expand_iterations
     part_offset, iterations = expand_iterations(params)
+    if any(it.get("SYMMETRY_PLANE") is not None for it in iterations):
+        raise ValueError("SYMMETRY_PLANE (s4/symmetry.py) is only implemented in --impl fast")
     with TIMER("cell 2: mesh setup"):
         run_cell2(model_path, np.asarray(part_offset, dtype=float), name, iterations[0]["SURFACE_SIMPLIFY_ERROR"])
 
