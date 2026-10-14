@@ -49,13 +49,13 @@ neighbours half-dragged (wandering lines: slope 0.1 targets 381, solved 398-407)
 - **`LIFT_BAND_MARGIN`** (default 0).
 
 ### Changed
-- **`params/benchy upsidedown tilted.json`**: `MAX_OVERHANG` 25, `LIFT_MODE` band, `ISLAND_LIFT_SLOPE` 0.16,
+- **`params/benchy upsidedown tilted.json`** (v1, replaced by v2 below): `MAX_OVERHANG` 25, `LIFT_MODE` band, `ISLAND_LIFT_SLOPE` 0.16,
   `LIFT_BAND_MARGIN` 1 (replaces the hull profile's 20 / 0.2 / `LIFT_HOLD_FALLOFF` 5). The low slope keeps the
   filled patch from becoming a cone; 0.16 is ~0.8 mm of new overhang per 0.13 mm layer, inside the support
   check's 1 mm. `MAX_OVERHANG` 25 removes most of an unsupported skin at the stern (part frame x 23, z 42, layer
   ~388, 22 mm in every `MAX_OVERHANG` 30 run with or without lift; the vertex flood does not see it).
 
-| benchy | built-in defaults | no lift | hull profile (before) | band profile |
+| benchy | built-in defaults | no lift | hull profile (before) | band profile v1 |
 |---|---|---|---|---|
 | hull `layer_turns` | 538 | 384 | 411 | 390 |
 | ungrounded walls | 21.9 mm | 1789 mm | 1.8 mm | 2.9 mm |
@@ -78,6 +78,42 @@ Other variants (hull `layer_turns`, deform only, same rotation field):
 | band at slope 0.16: `MAX_OVERHANG` 22 / 23 | 409 / 399 | the rotation field's rings come back |
 | band at slope 0.5 | 549 | the reflood is the cone again |
 | flood lift at `MAX_OVERHANG` 25, slope 0.16 | 402 | |
+
+### v2: the no-lift field outside the pits (`params/benchy upsidedown tilted.json` now)
+The first band profile's `MAX_OVERHANG` 25 changes the rotation field, so the whole hull differed from the no-lift
+print (deformed height on the hull surface off by 0.43 mm on average, up to 2.5 mm, even far from the pits). The
+profile is now `LIFT_MODE` band, `ISLAND_LIFT_SLOPE` 0.1, `LIFT_BAND_MARGIN` 1 with the built-in `MAX_OVERHANG` 30.
+Deformed height on the visible hull vs no lift (same mesh; regions by path distance from the slope-0.5 pit of the
+no-lift fit, 921 of the hull's 8705 surface vertices):
+
+| region | pit | 0-1.5 mm | 1.5-3 mm | 3-6 mm | rest |
+|---|---|---|---|---|---|
+| v2: mean / max abs. height change | 0.53 / 3.85 mm | 0.01 / 0.25 | 0.001 / 0.10 | 0 / 0.01 | 0 / 0 |
+| v1 (`MAX_OVERHANG` 25) | 1.22 / 5.0 | 0.70 / 3.07 | 0.65 / 2.93 | 0.52 / 2.86 | 0.43 / 2.5 |
+| layer_turns: no lift / v2 / v1 | 80.3 / 82.6 / 86.5 | 15.2 / 15.4 / 16.9 | 42.6 / 42.8 / 43.8 | 74.7 / 74.6 / 75.2 | 171.0 / 171.0 / 167.6 |
+
+(The lift solve also moves vertices in x and y, mostly a rigid shift; layer lines depend only on the heights.)
+
+| benchy | no lift | v1 | v2 |
+|---|---|---|---|
+| hull `layer_turns` | 384 | 390 | 386.5 |
+| ungrounded / island / cantilever walls | 1789 / 38 / 11.5 mm | 2.9 / 4.6 / 9.8 mm | 22.4 / 11.4 / 3.0 mm |
+| of it on the hull sides | ~1870 mm | ~1 mm | < 1 mm |
+| tilt, print time | 48.0 deg, 145.9 min | 52.2 deg, 152.1 min | 48.5 deg, 143.2 min |
+
+Nearly all of v2's ungrounded and island walls (21.8 mm, layers 388-390) are one spot at the stern (part frame
+x 23, z 42), the same in the no-lift print and in every `MAX_OVERHANG` 30 run: a top-surface dimple, so its first
+top-skin layer starts as a ~2 mm patch over sparse infill (gyroid lines 2.2 mm away, no wall nearby) and the
+support check finds nothing within 1 mm. It is not a pit of the shape (no vertex below its flood level). Cura's
+`top_skin_preshrink` 2.5 removes the patch but the walls around the dimple then float instead; `gradual_infill_steps`
+1 makes it much worse (520 mm); `skin_support` has no effect. Only more tilt (`MAX_OVERHANG` 25 or 20) avoids it.
+
+What stays: a strip along the bulwark rim (the pit, up to ~3 mm from the edge) prints as wide terraces. The
+rim is a lip that hangs below the deck in the print; the lift has to raise its tip up to 3.3 mm, to the level
+where the deck drains, so that strip is nearly level with the layers and each layer steps out ~1.3 mm. Tried
+for it (target fields on the fit, hull `layer_turns`): an uphill taper of the lift (max slope 0.3 or 0.15 mm/mm,
+smoothed): 391-394, lifts 1900-3500 vertices, closed rings on one side; slope 0.05: 380, but the hull-side walls
+float again (ungrounded walls 27.4 mm); slope 0.13: 393, larger lake.
 
 Not a default: with `LIFT_MODE` band, slope 0.16 on all six models, pi 3mm's bridge underside gets rougher (zigzag
 195 -> 263, `bridge_underside` 22 -> 67); Squirtle, dino, z mount and B axis mount are ok vs the baseline.

@@ -1,9 +1,8 @@
 {
-  "description": "Continuous layer bands on the hull exterior without islands (CHANGELOG 2026-10-14, band lift): the pits over the gunwales are filled with the band lift (LIFT_MODE band: the surrounding layer lines continued across the pit, no closed rings) at a gentle slope (ISLAND_LIFT_SLOPE 0.16, ~0.8 mm of step per 0.13 mm layer), and a little more tilt (MAX_OVERHANG 25) shrinks an unsupported skin at the stern (part frame x 23, z 42) from 22 to 2.5 mm. Vs the built-in defaults: hull layer_turns 538 -> 390 (no lift 384); ungrounded walls 21.9 -> 2.9 mm, island walls 10.5 -> 4.6 mm, cantilever walls 1.0 -> 9.8 mm; tilt 49 -> 52 deg.",
+  "description": "Hull exterior as in the no-lift print, without its islands (CHANGELOG 2026-10-14, band lift v2): the built-in rotation field (MAX_OVERHANG 30, so the hull's layer lines are the no-lift ones: deformed heights identical more than 1.5 mm from the pits), and the pits over the bulwark rims filled with the band lift (LIFT_MODE band: the layer lines around continued across the pit, no closed rings) at a gentle slope (ISLAND_LIFT_SLOPE 0.1). Vs the built-in defaults: hull layer_turns 538 -> 386 (no lift 384); hull-side islands gone. Left: a ~12-22 mm top-skin patch over sparse infill at the stern (part frame x 23, z 42), in every MAX_OVERHANG 30 print including no lift; MAX_OVERHANG 25 shrinks it to 2.5 mm but changes the whole hull's field.",
   "deform": {
-    "MAX_OVERHANG": 25,
     "LIFT_MODE": "band",
-    "ISLAND_LIFT_SLOPE": 0.16,
+    "ISLAND_LIFT_SLOPE": 0.1,
     "LIFT_BAND_MARGIN": 1
   }
 }
