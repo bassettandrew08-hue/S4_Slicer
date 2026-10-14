@@ -49,7 +49,16 @@ DEFAULT_PARAMS = dict(
     LIFT_PRECOND_FLOOR=0.3,        # PRECOND_FLOOR for the lifting solves only (< 0: same as the fit's). Lift
                                    # springs pull the whole mesh; without a floor the preconditioned step is huge at
                                    # vertices held only by micro-tets, and a dense micro-tet cluster gets torn apart
-    BARRIER_WEIGHT=0.02,           # barrier: beta, weight of the symmetric-Dirichlet fold barrier
+    # Pit-aware rotation field (not in the notebook; changes Byrd's field, so off by default; s4/island_free.py
+    # pit_free_field). > 0: up to this many rounds of correcting the rotation field where the fit leaves pits (local
+    # height minima off the bed), by the adjoint gradient of the pits' depth, before any lifting
+    PIT_FREE_ROUNDS=0,
+    PIT_FREE_SLOPE=0.0,            # a vertex is in a pit if it can't be reached from the bed by a path rising at
+                                   # least this many mm per mm (0: only true local minima, the islands)
+    PIT_FREE_MAX_STEP=10.0,        # deg: largest change of any tet's angle per round
+    PIT_FREE_SMOOTH=4.0,           # mm: length scale over which each round's correction is spread (smoothness)
+    PIT_FREE_FRACTION=0.7,         # each round aims to remove this fraction of the total pit depth (linear model)
+    BARRIER_WEIGHT=0.02,         # barrier: beta, weight of the symmetric-Dirichlet fold barrier
     FLIP_FREE_STAGES=10,           # barrier: the target rotations are ramped up in this many stages
     FLIP_FREE_STAGE_ITERATIONS=150,
     FIT_METHOD="penalty",          # "penalty": exact linear fit, then a soft fold penalty (robust on any mesh);

@@ -40,6 +40,7 @@ _KEYS = (
     "LIFT_HOLD_FALLOFF", "LIFT_PRECOND_FLOOR", "BARRIER_WEIGHT", "FLIP_FREE_STAGES", "FLIP_FREE_STAGE_ITERATIONS",
     "FIT_METHOD", "FOLD_PENALTY", "FOLD_PENALTY_DET", "PENALTY_ITERATIONS", "LIFT_ITERATIONS", "BED_PIN_WEIGHT",
     "BED_TOL", "SLIVER_QUALITY", "MICRO_TET_VOLUME", "PRECOND_FLOOR",
+    "PIT_FREE_ROUNDS", "PIT_FREE_SLOPE", "PIT_FREE_MAX_STEP", "PIT_FREE_SMOOTH", "PIT_FREE_FRACTION",
 )
 DEFAULTS = {k: DEFAULT_PARAMS[k] for k in _KEYS}
 
@@ -56,12 +57,15 @@ def vertex_graph(cells, n):
     return nbrs
 
 
-def priority_flood(V, nbrs, slope, bed_tol, bed=None):
+def priority_flood(V, nbrs, slope, bed_tol, bed=None, spill=False):
     """Lowest heights >= z so that every vertex is reachable from the bed by a path rising >= slope per mm. The bed
-    is the given vertices (the pinned bed face) or else everything within bed_tol of the lowest point."""
+    is the given vertices (the pinned bed face) or else everything within bed_tol of the lowest point.
+    spill=True also returns, per vertex, the vertex whose own height set its level (itself unless it is in a pit;
+    for a pit vertex the rim vertex the pit spills over)."""
     z = V[:, 2]
     n = len(z)
     h = np.full(n, np.inf)
+    src = np.arange(n)
     done = np.zeros(n, bool)
     pq = []
     for v in (np.nonzero(z <= z.min() + bed_tol)[0] if bed is None else bed).tolist():
@@ -79,11 +83,13 @@ def priority_flood(V, nbrs, slope, bed_tol, bed=None):
             if done[u]:
                 continue
             xu, yu = xy[u]
-            cand = max(zl[u], hv + slope * ((xu - xv) ** 2 + (yu - yv) ** 2) ** 0.5)
+            rise = hv + slope * ((xu - xv) ** 2 + (yu - yv) ** 2) ** 0.5
+            cand = max(zl[u], rise)
             if cand < h[u]:
                 h[u] = cand
+                src[u] = u if zl[u] >= rise else src[v]
                 heapq.heappush(pq, (cand, u))
-    return h
+    return (h, src) if spill else h
 
 
 def island_seeds(V, nbrs, bed_tol=1.0, min_persistence=0.2, bed=None):
@@ -156,6 +162,72 @@ def _hold_targets(V, nbrs, pit, held, weight, falloff):
     return idx, V[idx, 2].copy(), w, np.zeros(len(idx), bool)
 
 
+def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
+    """Pit-aware rotation field (PIT_FREE_ROUNDS > 0): change the rotation field where the fit leaves pits.
+
+    The fit's deformed height is (to first order, the linear fit) h = K^-1 b(theta), b = sum_c vol_c G_c g_c with
+    g_c = cos(theta_c) z + sin(theta_c) (z x t_c), the third row of the tet's target rotation (G_c: its basis-function
+    gradients, K the stiffness matrix, t_c its tangential axis). Each round:
+      1. the priority flood (slope PIT_FREE_SLOPE) gives every pit vertex its deficit d_v (how far it sits below the
+         level at which it is reachable from the bed) and the rim vertex its pit spills over;
+      2. the pit depth P = sum_v d_v (h_rim(v) - h_v) is differentiated with respect to every tet's angle with one
+         adjoint solve, lam = K^-1 a (a = -d_v at the pit vertices, +d_v at their rims):
+         dP/dtheta_c = vol_c (G_c lam_c) . dg_c/dtheta_c;
+      3. that gradient (per unit volume) is spread smoothly, (M + s^2 K) u = M g on the vertices (M lumped volume,
+         s = PIT_FREE_SMOOTH mm), back to the tets as the mean of their vertices;
+      4. theta -= a u, a chosen so the linear model removes PIT_FREE_FRACTION of P, but no tet's angle changes by more
+         than PIT_FREE_MAX_STEP deg; then the fit is solved again for the new field.
+    Stops when no vertex is more than 0.02 mm deep in a pit. Returns (rotation field, R, V, rounds, pit_info)."""
+    from scipy.sparse import diags, identity
+    from scipy.sparse.linalg import splu
+    n = prob.n
+    cells = prob.cells
+    Gi = prob.Dm_inv
+    G = np.concatenate([-Gi.sum(axis=1, keepdims=True), Gi], axis=1)
+    K = prob.K_raw
+    lu = splu((K + 1e-9 * np.median(K.diagonal()) * identity(n, format="csc")).tocsc())
+    zt = np.cross(np.array([0.0, 0.0, 1.0]), tangential_vectors(cell_centers))
+    s = float(q["PIT_FREE_SMOOTH"])
+    Mv = np.zeros(n)
+    np.add.at(Mv, cells.ravel(), np.repeat(prob.vol / 4, 4))
+    smooth = splu((diags(Mv) + s * s * K).tocsc()) if s > 0 else None
+    rf = np.asarray(rotation_field, np.float64).copy()
+    slope = float(q["PIT_FREE_SLOPE"])
+    first = None
+    k = 0
+    R = rotation_matrices(cell_centers, rf)
+    for k in range(int(q["PIT_FREE_ROUNDS"]) + 1):
+        h, src = priority_flood(V, nbrs, slope, bed_tol=0.5, bed=_grounded(V, bed), spill=True)
+        d = h - V[:, 2]
+        pit = np.nonzero(d > 0.02)[0]
+        if first is None:
+            first = (len(pit), float(d[pit].sum()))
+        if not len(pit) or k == int(q["PIT_FREE_ROUNDS"]):
+            break
+        a = np.zeros(n)
+        np.add.at(a, pit, -d[pit])
+        np.add.at(a, src[pit], d[pit])
+        lam = lu.solve(a)
+        dg = -np.sin(rf)[:, None] * np.array([0.0, 0.0, 1.0]) + np.cos(rf)[:, None] * zt
+        grad = prob.vol * np.einsum("cj,cj->c", np.einsum("ck,ckj->cj", lam[cells], G), dg)  # dP/dtheta
+        u = grad / prob.vol
+        if smooth is not None:
+            gv = np.zeros(n)
+            np.add.at(gv, cells.ravel(), np.repeat(grad / 4, 4))
+            u = smooth.solve(gv)[cells].mean(axis=1)
+        umax = float(np.abs(u).max())
+        gu = float(grad @ u)
+        if umax <= 0 or gu <= 0:
+            break
+        step = min(float(q["PIT_FREE_FRACTION"]) * float(d[pit].sum()) / gu, np.radians(float(q["PIT_FREE_MAX_STEP"])) / umax)
+        rf -= step * u
+        R = rotation_matrices(cell_centers, rf)
+        V = solve(R)
+    info = {"pit_vertices_before": first[0], "pit_depth_before": round(first[1], 2), "pit_vertices": len(pit),
+            "pit_depth": round(float(d[pit].sum()), 2), "pit_free_rounds": k}
+    return rf, R, V, info
+
+
 def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     """Fold-free fit of the rotation field, then island lifting. Returns (new vertex positions, info dict)."""
     q = {**DEFAULTS, **{k: p[k] for k in DEFAULTS if k in p}}
@@ -187,6 +259,22 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
         raise ValueError(f"unknown FIT_METHOD {q['FIT_METHOD']!r} (use 'penalty' or 'barrier')")
     t_fit = time.perf_counter() - t0
     nbrs = vertex_graph(np.asarray(cells), len(P0))
+    pit_info = None
+    if int(q["PIT_FREE_ROUNDS"]) > 0:
+        if q["FIT_METHOD"] != "penalty":
+            raise ValueError("PIT_FREE_ROUNDS needs FIT_METHOD 'penalty'")
+        rf_in = np.asarray(rotation_field, np.float64)
+
+        def _solve(Rk):
+            nonlocal iters
+            Vk, it = prob.solve(Rk, prob.linear_start(Rk, pin), int(q["PENALTY_ITERATIONS"]), lift=pin)
+            iters += it
+            return Vk
+        rotation_field, R, V, pit_info = pit_free_field(prob, cell_centers, rf_in, V, bed, nbrs, q, _solve)
+        dd = np.abs(np.degrees(rotation_field - rf_in))
+        pit_info["field_change_deg_mean"] = round(float((dd * prob.vol).sum() / prob.vol.sum()), 2)
+        pit_info["field_change_deg_max"] = round(float(dd.max()), 1)
+        pit_info["pit_free_seconds"] = round(time.perf_counter() - t0 - t_fit, 2)
     lifted = 0
     if lift:
         tgt = np.full(len(P0), -np.inf)
@@ -250,6 +338,8 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
             "tilt_deg": round(achieved, 1), "target_tilt_deg": round(wanted, 1),
             "lifted_vertices": lifted, "island_seeds": len(seeds),
             "island_mass": round(float(sum((d - b) * m for _, b, d, m in seeds)), 1)}
+    if pit_info is not None:
+        info.update(pit_info)
     if log:
         log(f"[deform] island-free: {info}")
         if wanted > 5 and achieved < 0.7 * wanted:
