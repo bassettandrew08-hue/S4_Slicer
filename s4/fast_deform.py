@@ -4,7 +4,9 @@ Fast deformation (notebook cells 2-11), numerically equivalent to s4/reference.p
 Output-preserving changes vs. the notebook:
   * neighbours: computed from connectivity with numpy, then fed through Python sets in the
     same insertion order pyvista/VTK uses, so every neighbour list has the identical order
-  * networkx graph: one add_weighted_edges_from call (same edge order)
+  * networkx graph + multi_source_dijkstra: replaced by a numba Dijkstra that replays networkx's search step by
+    step (same heap order (distance, push count), same neighbour order, same float additions), so the distances,
+    the closest bottom cell and the path maxima are identical; edge lengths via one vectorised norm (same values)
   * calculate_tet_attributes: the unused shared_vertices loop is dropped; the cell<->face
     maps use hashing instead of an O(points x surface points) search
   * multi-source Dijkstra runs once and is reused (the notebook runs the identical search 3x)
@@ -25,7 +27,7 @@ import base64
 import itertools
 import pickle
 
-import networkx as nx
+import numba
 import numpy as np
 import pyvista as pv
 from scipy.optimize import least_squares
@@ -179,38 +181,157 @@ def update_attributes(tet, cell_to_face, graph, compute_in_air=True, dijkstra_ca
     tet.cell_data['overhang_angle'] = overhang_angle
 
     if dijkstra_cache is not None and dijkstra_cache[0] == set(bottom_cells.tolist()):
-        distances, paths = dijkstra_cache[1], dijkstra_cache[2]  # same graph + same sources -> same result
+        dij = dijkstra_cache[1]  # same graph + same sources -> same result
     else:
-        with TIMER("dijkstra (networkx)"):
-            distances, paths = nx.multi_source_dijkstra(graph, set(bottom_cells))
+        with TIMER("dijkstra (numba, networkx order)"):
+            dij = multi_source_dijkstra(graph, bottom_cells)
 
     in_air = np.full(n, False)
     if compute_in_air:
         IN_AIR_THRESHOLD = 1
         z = cell_center[:, 2]
-        # max z over each path: path[c] = path[parent] + [c] in networkx, so fold along parents
-        maxz = np.full(n, -np.inf)
-        order = sorted(paths, key=lambda c: len(paths[c]))
-        for c in order:
-            p = paths[c]
-            if len(p) == 1:
-                maxz[c] = z[c]
-            else:
-                parent = p[-2]
-                zc = z[c]
-                mp = maxz[parent]
-                maxz[c] = zc if zc > mp else mp
-        lens = np.array([len(paths[c]) for c in range(n)])
-        in_air = (lens > 1) & (maxz > z + IN_AIR_THRESHOLD)
+        # max z over each path (networkx's path[c] = path[parent] + [c]), folded along the parents
+        maxz = _path_max(dij.order, dij.pred, np.ascontiguousarray(z, dtype=np.float64))
+        in_air = (dij.pred >= 0) & (maxz > z + IN_AIR_THRESHOLD)
     tet.cell_data['in_air'] = in_air
-    return bottom_cells_mask, bottom_cells, distances, paths
+    return bottom_cells_mask, bottom_cells, dij
 
 
-def prepare_mesh(model_path, part_offset=(0., 0., 0.), simplify_error=0.0):
+class CellGraph:
+    """The cell neighbour graph as networkx held it: per cell its neighbours in edge insertion order, with weights."""
+
+    def __init__(self, pairs, weights, n):
+        a = np.asarray(pairs[:, 0], np.int64)
+        b = np.asarray(pairs[:, 1], np.int64)
+        src = np.empty(2 * len(a), np.int64)
+        dst = np.empty(2 * len(a), np.int64)
+        src[0::2], src[1::2] = a, b  # nx: adj[a][b] then adj[b][a], edge by edge
+        dst[0::2], dst[1::2] = b, a
+        order = np.argsort(src, kind="stable")
+        self.nbr = dst[order]
+        self.w = np.repeat(np.asarray(weights, np.float64), 2)[order]
+        self.indptr = np.concatenate([[0], np.cumsum(np.bincount(src, minlength=n))]).astype(np.int64)
+        self.n = n
+
+
+class DijkstraResult:
+    """multi_source_dijkstra as arrays: dist (inf if unreached), pred (-1 for sources), root (the source the path
+    starts at, -1 if unreached), order (cells in the order they were settled)."""
+
+    def __init__(self, dist, pred, root, order):
+        self.dist, self.pred, self.root, self.order = dist, pred, root, order
+
+
+@numba.njit(cache=True)
+def _heap_push(hd, hc, hv, size, d, c, v):
+    i = size
+    hd[i], hc[i], hv[i] = d, c, v
+    while i > 0:
+        p = (i - 1) >> 1
+        if hd[p] < hd[i] or (hd[p] == hd[i] and hc[p] < hc[i]):
+            break
+        hd[p], hd[i] = hd[i], hd[p]
+        hc[p], hc[i] = hc[i], hc[p]
+        hv[p], hv[i] = hv[i], hv[p]
+        i = p
+    return size + 1
+
+
+@numba.njit(cache=True)
+def _heap_pop(hd, hc, hv, size):
+    d, v = hd[0], hv[0]
+    size -= 1
+    hd[0], hc[0], hv[0] = hd[size], hc[size], hv[size]
+    i = 0
+    while True:
+        l = 2 * i + 1
+        if l >= size:
+            break
+        m = l
+        r = l + 1
+        if r < size and (hd[r] < hd[l] or (hd[r] == hd[l] and hc[r] < hc[l])):
+            m = r
+        if hd[i] < hd[m] or (hd[i] == hd[m] and hc[i] < hc[m]):
+            break
+        hd[m], hd[i] = hd[i], hd[m]
+        hc[m], hc[i] = hc[i], hc[m]
+        hv[m], hv[i] = hv[i], hv[m]
+        i = m
+    return d, v, size
+
+
+@numba.njit(cache=True)
+def _dijkstra_nx(indptr, nbr, w, sources, n):
+    """networkx _dijkstra_multisource, step for step: heap entries (distance, push count, node), the first pop of a
+    node settles it, a neighbour is pushed when unseen or strictly closer, and its path is its parent's plus itself."""
+    dist = np.full(n, np.inf)
+    done = np.zeros(n, np.bool_)
+    seen = np.zeros(n, np.bool_)
+    seen_d = np.zeros(n)
+    pred = np.full(n, -1, np.int64)
+    order = np.empty(n, np.int64)
+    cap = len(sources) + len(nbr) + 1
+    hd = np.empty(cap)
+    hc = np.empty(cap, np.int64)
+    hv = np.empty(cap, np.int64)
+    size = 0
+    cnt = 0
+    for s in sources:
+        seen[s] = True
+        seen_d[s] = 0.0
+        size = _heap_push(hd, hc, hv, size, 0.0, cnt, s)
+        cnt += 1
+    nd = 0
+    while size > 0:
+        d, v, size = _heap_pop(hd, hc, hv, size)
+        if done[v]:
+            continue
+        done[v] = True
+        dist[v] = d
+        order[nd] = v
+        nd += 1
+        for k in range(indptr[v], indptr[v + 1]):
+            u = nbr[k]
+            vu = d + w[k]
+            if done[u]:
+                continue
+            if not seen[u] or vu < seen_d[u]:
+                seen[u] = True
+                seen_d[u] = vu
+                size = _heap_push(hd, hc, hv, size, vu, cnt, u)
+                cnt += 1
+                pred[u] = v
+    order = order[:nd]
+    root = np.full(n, -1, np.int64)
+    for v in order:
+        root[v] = v if pred[v] < 0 else root[pred[v]]
+    return dist, pred, root, order
+
+
+@numba.njit(cache=True)
+def _path_max(order, pred, z):
+    maxz = np.full(len(z), -np.inf)
+    for c in order:
+        if pred[c] < 0:
+            maxz[c] = z[c]
+        else:
+            zc = z[c]
+            mp = maxz[pred[c]]
+            maxz[c] = zc if zc > mp else mp
+    return maxz
+
+
+def multi_source_dijkstra(graph, sources):
+    """nx.multi_source_dijkstra(G, set(sources)) as a DijkstraResult (the sources are pushed in that set's order)."""
+    src = np.array(list(set(np.asarray(sources).tolist())), dtype=np.int64)
+    return DijkstraResult(*_dijkstra_nx(graph.indptr, graph.nbr, graph.w, src, graph.n))
+
+
+def prepare_mesh(model_path, part_offset=(0., 0., 0.), simplify_error=0.0, max_volume=None):
     """Notebook cell 2 (fast)."""
     ctx = MeshContext()
     with TIMER("load + tetgen"):
-        tet = meshio_s4.load_and_tetrahedralize(model_path, part_offset, simplify_error)
+        tet = meshio_s4.load_and_tetrahedralize(model_path, part_offset, simplify_error, max_volume)
     cells = meshio_s4.cells_of(tet)
     ctx.tet, ctx.cells = tet, cells
 
@@ -220,14 +341,12 @@ def prepare_mesh(model_path, part_offset=(0., 0., 0.), simplify_error=0.0):
             tet.field_data[f"cell_{kind}_neighbours"] = arr
         ctx.nbr = neighbour_dicts(pairs, tet.number_of_cells)
 
-    with TIMER("networkx graph (bulk)"):
+    with TIMER("cell graph"):
         cc = np.asarray(tet.cell_centers().points)
         pp = pairs["point"]
         diff = cc[pp[:, 0]] - cc[pp[:, 1]]
-        dist = np.array([np.linalg.norm(d) for d in diff])  # same 1-D norm as the notebook
-        g = nx.Graph()
-        g.add_weighted_edges_from(zip(pp[:, 0].tolist(), pp[:, 1].tolist(), dist.tolist()))
-        ctx.graph = g
+        dist = np.linalg.norm(diff, axis=1)  # row by row the same values as the notebook's 1-D norms
+        ctx.graph = CellGraph(pp, dist, tet.number_of_cells)
 
     with TIMER("tet attributes (hashing)"):
         surface_mesh = tet.extract_surface(algorithm='dataset_surface')
@@ -235,10 +354,10 @@ def prepare_mesh(model_path, part_offset=(0., 0., 0.), simplify_error=0.0):
         tet.add_field_data(base64.b64encode(pickle.dumps(ctx.cell_to_face)).decode('utf-8'), "cell_to_face")
         tet.add_field_data(cells, "cells")
         tet.add_field_data(tet.points, "cell_vertices")
-        mask, bottom, dist_b, paths_b = update_attributes(tet, ctx.cell_to_face, ctx.graph)
+        mask, bottom, dij = update_attributes(tet, ctx.cell_to_face, ctx.graph)
         tet.cell_data['overhang_angle'][bottom] = np.nan
         ctx.bottom_cells_mask, ctx.bottom_cells = mask, bottom
-        ctx.distances_to_bottom, ctx.paths_to_bottom = dist_b, paths_b
+        ctx.dijkstra = dij
     return ctx
 
 
@@ -275,9 +394,8 @@ def path_length_to_base_gradient(ctx, tet, MAX_OVERHANG, INITIAL_ROTATION_FIELD_
     candidates = np.nonzero(is_overhang & ~ctx.bottom_cells_mask)[0]
     dist = np.full(n, np.nan)
     closest = np.zeros(n, dtype=int)
-    for c in candidates.tolist():
-        closest[c] = ctx.paths_to_bottom[c][0]
-        dist[c] = ctx.distances_to_bottom[c]
+    closest[candidates] = ctx.dijkstra.root[candidates]  # the bottom cell each shortest path starts at
+    dist[candidates] = ctx.dijkstra.dist[candidates]
     tet.cell_data["cell_distance_to_bottom"] = dist
 
     with TIMER("gradient: plane fits"):
@@ -439,7 +557,7 @@ def next_iteration_mesh(ctx, new_vertices):
     t.field_data["cells"] = ctx.cells
     t.field_data["cell_vertices"] = t.points
     t.field_data["cell_face_neighbours"] = ctx.tet.field_data["cell_face_neighbours"]
-    cached = (set(ctx.bottom_cells.tolist()), ctx.distances_to_bottom, ctx.paths_to_bottom)
+    cached = (set(ctx.bottom_cells.tolist()), ctx.dijkstra)
     update_attributes(t, ctx.cell_to_face, ctx.graph, dijkstra_cache=cached)
     return t
 
@@ -467,7 +585,8 @@ def deform(model_path, params=None, verbose=0):
     from .params import expand_iterations
     part_offset, iterations = expand_iterations(params)
     with TIMER("mesh setup"):
-        ctx = prepare_mesh(model_path, part_offset, iterations[0]["SURFACE_SIMPLIFY_ERROR"])
+        ctx = prepare_mesh(model_path, part_offset, iterations[0]["SURFACE_SIMPLIFY_ERROR"],
+                           iterations[0]["TET_MAX_VOLUME"])
     tet = ctx.tet
     for it, p in enumerate(iterations):
         tag = f" [iteration {it + 1}/{len(iterations)}]" if len(iterations) > 1 else ""

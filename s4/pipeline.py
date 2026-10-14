@@ -24,6 +24,50 @@ def planar_retraction(planar_path, default=1.0):
     return counts.most_common(1)[0][0] if counts else default
 
 
+def final_checks(out_gcode, mp, retraction):
+    """The poles check (quality.vertical_extrusion) and the print-time estimate of the finished G-code (before its
+    settings header). Both only read the file, so run() runs them in a worker process while the support check runs.
+    Returns (poles, estimate in s or None, error message or None, seconds of each)."""
+    from . import quality, print_time
+    t0 = time.perf_counter()
+    poles = quality.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"], retraction=retraction)
+    t1 = time.perf_counter()
+    est, err = None, None
+    try:
+        est = print_time.estimate(out_gcode, mp)
+    except (ValueError, TypeError) as e:  # a machine limit set to 0 or null in the profile
+        err = str(e)
+    return poles, est, err, (t1 - t0, time.perf_counter() - t1)
+
+
+class _Background:
+    """final_checks in a worker process (S4_NO_WORKER=1, or a failure to start one: in this process, when asked)."""
+
+    def __init__(self, *args):
+        self.args, self.fut, self.pool = args, None, None
+        if os.environ.get("S4_NO_WORKER") == "1":
+            return
+        try:
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+            self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+            self.fut = self.pool.submit(final_checks, *args)
+        except Exception:
+            self.fut = None
+
+    def result(self):
+        try:
+            if self.fut is not None:
+                try:
+                    return self.fut.result()
+                except Exception:
+                    pass  # e.g. a broken worker: do it here
+            return final_checks(*self.args)
+        finally:
+            if self.pool is not None:
+                self.pool.shutdown()
+
+
 def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_engine=None, sliced_gcode=None,
         save_gif=False, save_pickle=False, support_check=True, params=None, log=print):
     """
@@ -136,16 +180,29 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
                 with TIMER("axis speed limits"):
                     stats.update(feed_limits.apply(out_gcode, mp["MAX_SPEED_C"], mp["MAX_SPEED_B"], mp["MAX_SPEED_X"],
                                                    mp["MAX_SPEED_Z"], nozzle_offset=mp["NOZZLE_OFFSET"]))
+        # the poles check and the print-time estimate only read the finished G-code: start them now, in a worker
+        # process, and let them run while the support check runs here
+        background = _Background(out_gcode, mp, retraction)
         if support_check:
             with TIMER("4. support check"):
                 from .params import expand_iterations
                 part_offset, iters = expand_iterations(p)
+                # the undeformed mesh of this run (re-running TetGen gives the same one), and for the fast
+                # implementation the mapper's own mapping of the same planar points (identical numbers)
+                mapped = None
+                if impl != "reference":
+                    from . import fast_map
+                    mapped = fast_map.LAST_MAP
                 support = sc.check(model_path, np.asarray(deformed.points), planar_path,
                                    part_offset=part_offset, retraction_length=retraction,
-                                   seg_size=mp["SEG_SIZE"], simplify_error=iters[0]["SURFACE_SIMPLIFY_ERROR"])
+                                   seg_size=mp["SEG_SIZE"], simplify_error=iters[0]["SURFACE_SIMPLIFY_ERROR"],
+                                   max_volume=iters[0]["TET_MAX_VOLUME"], input_grid=input_tet, mapped=mapped)
             stats["floating_points"] = support["floating_points"]
             log(sc.format_report(support))
-    poles = quality.vertical_extrusion(out_gcode, nozzle_offset=mp["NOZZLE_OFFSET"], retraction=retraction)
+    with TIMER("poles + print-time estimate (worker; wait)"):
+        poles, est, est_err, secs = background.result()
+    TIMER.records.append([1, "poles check (in the worker)", secs[0]])
+    TIMER.records.append([1, "print-time estimate (in the worker)", secs[1]])
     stats["poles"] = len(poles[0])
     if support_check:
         stats["ungrounded_mm"] = round(support["ungrounded_mm"], 1)
@@ -155,12 +212,10 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
             stats[f"{k}_mm"] = round(support["runs"][k]["length_mm"], 1)
             stats[f"{k}_wall_mm"] = round(support["runs"][k]["wall_mm"], 1)  # of it walls/skin, not sparse infill
     # the time R-Theta Sim will show for this file (same planner; the settings header is comments only)
-    from . import print_time
-    with TIMER("print-time estimate"):
-        try:
-            stats["estimated_print_time_min"] = round(print_time.estimate(out_gcode, mp) / 60, 1)
-        except (ValueError, TypeError) as e:  # a machine limit set to 0 or null in the profile
-            log(f"[print-time] no estimate: {e}")
+    if est_err is None:
+        stats["estimated_print_time_min"] = round(est / 60, 1)
+    else:
+        log(f"[print-time] no estimate: {est_err}")
 
     # settings comments for the R-Theta simulator, at the top of the final G-code
     from . import sim_header
@@ -174,9 +229,10 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
         except Exception:
             info = None
     shown = dict(prof); shown["map"] = dict(prof["map"], RETRACTION_LENGTH=retraction)  # the value actually used
-    header = sim_header.build(name, shown, stats, planar_path, info, _fd.LAST_DEFORM_INFO,
-                              sliced_by_cura_here=sliced_gcode is None)
-    sim_header.prepend(out_gcode, header)
+    with TIMER("settings header"):
+        header = sim_header.build(name, shown, stats, planar_path, info, _fd.LAST_DEFORM_INFO,
+                                  sliced_by_cura_here=sliced_gcode is None)
+        sim_header.prepend(out_gcode, header)
     log(quality.format_vertical(poles, line_offset=len(header)))  # line numbers in the final file
     total = time.perf_counter() - t0
     log(f"[map] {stats}")

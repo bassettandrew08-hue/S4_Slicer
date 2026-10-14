@@ -13,6 +13,7 @@ What changed vs. the notebook (all output-preserving):
   * output lines are formatted with the same format specs and written in one go
 """
 import math
+import os
 import re
 
 import numpy as np
@@ -51,7 +52,121 @@ def tet_volumes(p1, p2, p3, p4):
     return _abs_det3(np.stack([p2 - p1, p3 - p1, p4 - p1], axis=1)) / 6
 
 
+_POINTS_CACHE = {}  # (path, size, mtime, SEG_SIZE) -> read_gcode_points result (the mapper and the support check)
+
+
 def read_gcode_points(path, SEG_SIZE):
+    """Equivalent of reference.read_gcode_points. Returns dict of arrays/lists, plus "line": the index (in
+    str.splitlines order) of the G-code line each point comes from. The result is cached per file and SEG_SIZE (the
+    mapper and the support check read the same planar file); treat it as read-only."""
+    st = os.stat(path)
+    key = (os.path.abspath(path), st.st_size, st.st_mtime_ns, float(SEG_SIZE))
+    hit = _POINTS_CACHE.get(key)
+    if hit is None:
+        _POINTS_CACHE.clear()
+        hit = _POINTS_CACHE[key] = _read_gcode_points(path, SEG_SIZE)
+    return hit
+
+
+def _ffill(has, values, initial):
+    """values[i] where has[i], else the last earlier value that had one (initial before the first)."""
+    idx = np.where(has, np.arange(len(has)), -1)
+    np.maximum.accumulate(idx, out=idx)
+    out = np.where(idx >= 0, values[np.maximum(idx, 0)], initial)
+    return out, idx
+
+
+def _read_gcode_points(path, SEG_SIZE):
+    """The parse is per line (regex, same words as before); the segmentation is vectorised with the same float
+    operations as the per-line loop (_read_gcode_points_loop, kept as the reference): row-wise norm == 1-D norm,
+    numpy floor division, and every quotient/product in the same order."""
+    with open(path, "r") as fh:
+        text = fh.read()
+    line_no, mot = [], []
+    vals = []  # per motion line: x, y, z, f, e (nan = absent)
+    has = []
+    nan = float("nan")
+    for ln, raw in enumerate(text.splitlines()):
+        code = raw.split(";", 1)[0]
+        if "(" in code:
+            code = re.sub(r"\([^)]*\)", "", code)
+        words = _WORD.findall(code)
+        if not words:
+            continue
+        motion = None
+        x = y = z = f_val = e_val = None
+        for letter, num in words:
+            L = letter.upper()
+            if L == "G":
+                v = float(num)
+                if v == 0:
+                    motion = 0
+                elif v == 1:
+                    motion = 1
+            elif L == "X":
+                x = float(num)
+            elif L == "Y":
+                y = float(num)
+            elif L == "Z":
+                z = float(num)
+            elif L == "F":
+                f_val = float(num)
+            elif L == "E":
+                e_val = float(num)
+        if motion is None:
+            continue
+        line_no.append(ln)
+        mot.append(motion)
+        vals.append((nan if x is None else x, nan if y is None else y, nan if z is None else z,
+                     nan if f_val is None else f_val, nan if e_val is None else e_val))
+        has.append((x is not None, y is not None, z is not None, f_val is not None, e_val is not None))
+    m = len(mot)
+    if m == 0:
+        return {"position": np.zeros((0, 3)), "command": [], "extrusion": [], "inv_time_feed": [], "feed": [],
+                "line": np.zeros(0, np.int64)}
+    V = np.array(vals, dtype=np.float64)
+    H = np.array(has, dtype=bool)
+    pos = np.empty((m, 3))
+    for k, init in enumerate((0.0, 0.0, 20.0)):
+        pos[:, k] = _ffill(H[:, k], V[:, k], init)[0]
+    prev = np.vstack([[0.0, 0.0, 20.0], pos[:-1]])
+    delta = pos - prev
+    distance = np.linalg.norm(delta, axis=1)
+    # feed: sticky, starting at the int 5000 like the loop (kept as Python objects for the "feed" list)
+    _, fidx = _ffill(H[:, 3], V[:, 3], 0.0)
+    feed_obj = [5000] + V[:, 3].tolist()
+    feed_at = [feed_obj[j + 1] for j in fidx.tolist()]
+    feed_f = np.array(feed_at, dtype=np.float64)
+    moving = distance > 0
+    nseg = np.ones(m)
+    nseg[moving] = -(-distance[moving] // SEG_SIZE)
+    seg_distance = np.where(moving, distance / nseg, distance)
+    t = (1 / feed_f) * seg_distance
+    with np.errstate(divide="ignore"):
+        inv = np.where(t == 0, np.nan, 1 / t)
+    n = nseg.astype(np.int64)
+    rep = np.repeat(np.arange(m), n)
+    first = np.cumsum(n) - n
+    k = (np.arange(len(rep)) - first[rep] + 1).astype(np.float64)
+    mv = moving[rep]
+    P = np.where(mv[:, None], prev[rep] + delta[rep] * k[:, None] / nseg[rep][:, None], pos[rep])
+    e_has = H[:, 4]
+    e_div = np.where(moving, V[:, 4] / nseg, V[:, 4])
+    e_list = e_div.tolist()
+    inv_list = inv.tolist()
+    mot_s = ("G00", "G01")
+    rep_l = rep.tolist()
+    ehl = e_has.tolist()
+    commands = [mot_s[mot[i]] for i in rep_l]
+    extrusions = [e_list[i] if ehl[i] else None for i in rep_l]
+    inv_ok = (~np.isnan(inv)).tolist()
+    inv_feeds = [inv_list[i] if inv_ok[i] else None for i in rep_l]
+    feeds = [feed_at[i] for i in rep_l]
+    return {"position": P, "command": commands, "extrusion": extrusions, "inv_time_feed": inv_feeds,
+            "feed": feeds, "line": np.asarray(line_no, np.int64)[rep]}
+
+
+def _read_gcode_points_loop(path, SEG_SIZE):
     """Equivalent of reference.read_gcode_points. Returns dict of arrays/lists."""
     pos = np.array([0., 0., 20.])
     feed = 5000
@@ -219,6 +334,9 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
             squish_all = np.sum(vertex_ratio[idx] * bary, axis=1)
         else:
             squish_all = z_squish_scales[containing]
+    # for the support check (s4/support_check.py check(mapped=...)): it maps the same points the same way
+    LAST_MAP.clear()
+    LAST_MAP.update(planar=gcode_path, seg_size=mp["SEG_SIZE"], g=g, real=new_pos_all, ok=bary_ok)
 
     if mp.get("MAP_SMOOTH", 0) and mp["MAP_SMOOTH"] > 0:
         with TIMER("smooth mapping (MAP_SMOOTH)"):
@@ -237,6 +355,7 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
 
 
 SMOOTH_STATS = {}  # diagnostics of the last smooth_mapping call
+LAST_MAP = {}  # the last map_gcode's planar points, their real-space positions (before MAP_SMOOTH) and in-mesh flags
 
 
 def smooth_mapping(P, mapped, ok, g, retraction, sigma, max_shift, window=12, chunk=100000):

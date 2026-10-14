@@ -10,6 +10,7 @@ part, to confirm the toolpath stays inside the model.
 import re
 from collections import Counter
 
+import numba
 import numpy as np
 from scipy.spatial import cKDTree
 from scipy.sparse import csr_matrix
@@ -20,7 +21,34 @@ from . import fast_map, meshio_s4
 _WORD = re.compile(r"([A-Za-z])\s*(-?(?:\d+\.?\d*|\.\d+))")
 
 
-def _planar_layers(planar_path, seg_size):
+def _planar_layers(planar_path, seg_size, g=None):
+    """Planar layer number and ;TYPE: for every segmented point read_gcode_points produces. From the line each point
+    came from (g["line"]) and the ;LAYER: / ;TYPE: comments above it; _planar_layers_loop is the old per-line
+    version (its own parse), used if the two parses disagree on the point count."""
+    if g is None:
+        g = fast_map.read_gcode_points(planar_path, seg_size)
+    with open(planar_path) as fh:
+        lines = fh.read().splitlines()
+    layer_of_line = np.empty(len(lines), np.int64)
+    type_ids = {}
+    type_of_line = np.empty(len(lines), np.int64)
+    layer, typ = -1, type_ids.setdefault("?", 0)
+    for i, raw in enumerate(lines):
+        if raw.startswith(";"):
+            if raw.startswith(";LAYER:"):
+                layer = int(raw[7:])
+            elif raw.startswith(";TYPE:"):
+                typ = type_ids.setdefault(raw[6:].strip(), len(type_ids))
+        layer_of_line[i] = layer
+        type_of_line[i] = typ
+    if len(lines) != sum(1 for _ in open(planar_path)):  # a line break splitlines knows and the file reader not
+        return _planar_layers_loop(planar_path, seg_size)
+    names = list(type_ids)
+    ln = g["line"]
+    return layer_of_line[ln], [names[t] for t in type_of_line[ln].tolist()]
+
+
+def _planar_layers_loop(planar_path, seg_size):
     """Planar layer number and ;TYPE: for every segmented point read_gcode_points produces."""
     layer_ids, types = [], []
     layer, typ = -1, "?"
@@ -50,35 +78,46 @@ def _planar_layers(planar_path, seg_size):
 
 
 def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), radius=1.0, seg_size=0.6,
-          retraction_length=1.0, input_grid=None, simplify_error=0.0):
-    """input_grid: undeformed tet mesh to use instead of re-running tetgen on model_path (simplify_error: the
-    deform's SURFACE_SIMPLIFY_ERROR, so the re-run gives the same mesh)."""
+          retraction_length=1.0, input_grid=None, simplify_error=0.0, max_volume=None, mapped=None):
+    """input_grid: undeformed tet mesh to use instead of re-running tetgen on model_path (simplify_error, max_volume:
+    the deform's SURFACE_SIMPLIFY_ERROR and TET_MAX_VOLUME, so the re-run gives the same mesh).
+    mapped: fast_map.LAST_MAP of the mapper's run on the same mesh, deformed points and planar G-code: its planar
+    points, real-space positions and in-mesh flags are exactly what this function would compute, so they are reused."""
     inp = input_grid if input_grid is not None else meshio_s4.load_and_tetrahedralize(model_path, part_offset,
-                                                                                       simplify_error)
+                                                                                       simplify_error, max_volume)
     cells = meshio_s4.cells_of(inp)
     P0 = np.asarray(inp.points)
     Pd = np.asarray(deformed_points)
     d = meshio_s4.deformed_grid_from_points(inp, Pd)
 
-    g = fast_map.read_gcode_points(planar_path, seg_size)
-    P = g["position"]
-    layer, types = _planar_layers(planar_path, seg_size)
+    if mapped is not None and mapped.get("seg_size") == seg_size and mapped.get("planar") == planar_path:
+        g = mapped["g"]
+        P = g["position"]
+        real, ok = mapped["real"], mapped["ok"]
+    else:
+        g = fast_map.read_gcode_points(planar_path, seg_size)
+        P = g["position"]
+        cont = meshio_s4.make_find_cells(d)(P)
+        cv = Pd[cells[cont]]
+        total = fast_map.tet_volumes(*[cv[:, i] for i in range(4)])
+        bary = np.stack([fast_map.tet_volumes(P, cv[:, 1], cv[:, 2], cv[:, 3]),
+                         fast_map.tet_volumes(P, cv[:, 0], cv[:, 2], cv[:, 3]),
+                         fast_map.tet_volumes(P, cv[:, 0], cv[:, 1], cv[:, 3]),
+                         fast_map.tet_volumes(P, cv[:, 0], cv[:, 1], cv[:, 2])], axis=1) / total[:, None]
+        real = P - np.sum((Pd - P0)[cells[cont]] * bary[:, :, None], axis=1)
+        ok = ~(bary.sum(axis=1) > 1.01)
+    layer, types = _planar_layers(planar_path, seg_size, g)
     assert len(layer) == len(P)
-    cont = meshio_s4.make_find_cells(d)(P)
-    cv = Pd[cells[cont]]
-    total = fast_map.tet_volumes(*[cv[:, i] for i in range(4)])
-    bary = np.stack([fast_map.tet_volumes(P, cv[:, 1], cv[:, 2], cv[:, 3]),
-                     fast_map.tet_volumes(P, cv[:, 0], cv[:, 2], cv[:, 3]),
-                     fast_map.tet_volumes(P, cv[:, 0], cv[:, 1], cv[:, 3]),
-                     fast_map.tet_volumes(P, cv[:, 0], cv[:, 1], cv[:, 2])], axis=1) / total[:, None]
-    real = P - np.sum((Pd - P0)[cells[cont]] * bary[:, :, None], axis=1)
     ext = np.array([e is not None and e > 0 and abs(e) != retraction_length for e in g["extrusion"]])
-    ext &= ~(bary.sum(axis=1) > 1.01)  # the mapper drops these
+    ext &= ok  # the mapper drops the others
 
     surf = inp.extract_surface(algorithm="dataset_surface")
     inside = np.asarray(inp.find_containing_cell(real[ext])) >= 0
-    _, cp = surf.find_closest_cell(real[ext], return_closest_point=True)
-    outside_mm = np.where(inside, 0.0, np.linalg.norm(real[ext] - cp, axis=1))
+    outside_mm = np.zeros(len(inside))
+    if (~inside).any():  # the distance to the surface, only needed where the point is outside the part
+        out_pts = real[ext][~inside]
+        _, cp = surf.find_closest_cell(out_pts, return_closest_point=True)
+        outside_mm[~inside] = np.linalg.norm(out_pts - cp, axis=1)
     r = analyse(real, ext, layer, types, radius)
     r["outside_part_points"] = int((outside_mm > 0.5).sum())
     return r
@@ -98,9 +137,137 @@ def check_planar(planar_path, radius=1.0, seg_size=0.6, retraction_length=1.0):
 class _Earlier:
     """The points added so far (earlier layers), for "is any of them within R" and "how far is the nearest" queries.
 
-    Counts only, never neighbour lists: a 0.13 mm-layer print has ~200 neighbours within 1 mm a point, and a badly
-    mapped spot 10^4 or more, too many to list. The points live in a big KD-tree plus a small one for the latest
-    layers; the big one is rebuilt when the small one outgrows a quarter of it, so the rebuilds cost O(n log n)."""
+    All the points that can ever be added are known up front (`universe`), so they sit in one static hash grid of
+    R-sized cells (numba, queries in parallel); add() only switches points on. A point counts when its squared
+    distance, summed x, y, z in that order (as cKDTree does), is <= R^2: the same test the KD-trees this replaced
+    made, so the same answers (tools: compare with _EarlierKD)."""
+
+    def __init__(self, R, universe):
+        self.R = float(R)
+        U = np.ascontiguousarray(universe, dtype=np.float64)
+        self.U = U
+        self.on = np.zeros(len(U), np.bool_)
+        self.cell = self.R * (1.0 + 1e-9)  # a point within R is never two cells away, whatever the rounding
+        if len(U):
+            self.origin = U.min(0) - self.cell
+            ijk = np.floor((U - self.origin) / self.cell).astype(np.int64)
+            self.dims = ijk.max(0) + 3
+        else:
+            self.origin = np.zeros(3)
+            ijk = np.zeros((0, 3), np.int64)
+            self.dims = np.ones(3, np.int64) * 3
+        key = (ijk[:, 0] * self.dims[1] + ijk[:, 1]) * self.dims[2] + ijk[:, 2]
+        self.order = np.argsort(key, kind="stable").astype(np.int64)
+        self.keys, start = np.unique(key[self.order], return_index=True)
+        self.start = np.append(start, len(U)).astype(np.int64)
+
+    def add_index(self, idx):
+        self.on[idx] = True
+
+    def _ijk(self, pts):
+        return np.floor((np.ascontiguousarray(pts, dtype=np.float64) - self.origin) / self.cell).astype(np.int64)
+
+    def any_within(self, pts):
+        if len(pts) == 0:
+            return np.zeros(0, bool)
+        return _grid_any_within(np.ascontiguousarray(pts, dtype=np.float64), self._ijk(pts), self.U, self.on,
+                                self.order, self.keys, self.start, self.dims, self.R * self.R)
+
+    def nearest(self, pts):
+        if len(pts) == 0:
+            return np.zeros(0)
+        if not self.on.any():
+            return np.full(len(pts), np.inf)
+        return _grid_nearest(np.ascontiguousarray(pts, dtype=np.float64), self._ijk(pts), self.U, self.on,
+                             self.order, self.keys, self.start, self.dims, self.R)
+
+
+@numba.njit(cache=True, inline="always")
+def _d2(U, j, q0, q1, q2):
+    d = q0 - U[j, 0]
+    s = 0.0 + d * d
+    d = q1 - U[j, 1]
+    s += d * d
+    d = q2 - U[j, 2]
+    s += d * d
+    return s
+
+
+@numba.njit(cache=True, inline="always")
+def _find_cell(keys, key):
+    k = np.searchsorted(keys, key)
+    if k < len(keys) and keys[k] == key:
+        return k
+    return -1
+
+
+@numba.njit(parallel=True, cache=True)
+def _grid_any_within(Q, ijk, U, on, order, keys, start, dims, R2):
+    out = np.zeros(len(Q), np.bool_)
+    for i in numba.prange(len(Q)):
+        q0, q1, q2 = Q[i, 0], Q[i, 1], Q[i, 2]
+        found = False
+        for dx in range(-1, 2):
+            if found:
+                break
+            for dy in range(-1, 2):
+                if found:
+                    break
+                for dz in range(-1, 2):
+                    a, b, c = ijk[i, 0] + dx, ijk[i, 1] + dy, ijk[i, 2] + dz
+                    if a < 0 or b < 0 or c < 0 or a >= dims[0] or b >= dims[1] or c >= dims[2]:
+                        continue
+                    k = _find_cell(keys, (a * dims[1] + b) * dims[2] + c)
+                    if k < 0:
+                        continue
+                    for t in range(start[k], start[k + 1]):
+                        j = order[t]
+                        if on[j] and _d2(U, j, q0, q1, q2) <= R2:
+                            found = True
+                            break
+                    if found:
+                        break
+        out[i] = found
+    return out
+
+
+@numba.njit(parallel=True, cache=True)
+def _grid_nearest(Q, ijk, U, on, order, keys, start, dims, R):
+    """Distance to the nearest switched-on point (inf if none): rings of cells around the query's cell, until the
+    best distance found is shorter than anything further out can be."""
+    out = np.full(len(Q), np.inf)
+    max_ring = max(dims[0], max(dims[1], dims[2]))
+    for i in numba.prange(len(Q)):
+        q0, q1, q2 = Q[i, 0], Q[i, 1], Q[i, 2]
+        best = np.inf
+        for s in range(max_ring + 1):
+            for dx in range(-s, s + 1):
+                for dy in range(-s, s + 1):
+                    for dz in range(-s, s + 1):
+                        if max(abs(dx), max(abs(dy), abs(dz))) != s:
+                            continue
+                        a, b, c = ijk[i, 0] + dx, ijk[i, 1] + dy, ijk[i, 2] + dz
+                        if a < 0 or b < 0 or c < 0 or a >= dims[0] or b >= dims[1] or c >= dims[2]:
+                            continue
+                        k = _find_cell(keys, (a * dims[1] + b) * dims[2] + c)
+                        if k < 0:
+                            continue
+                        for t in range(start[k], start[k + 1]):
+                            j = order[t]
+                            if on[j]:
+                                d = _d2(U, j, q0, q1, q2)
+                                if d < best:
+                                    best = d
+            # anything in ring s + 1 or further is more than s * R away
+            if best < (s * R) * (s * R):
+                break
+        out[i] = np.sqrt(best)
+    return out
+
+
+class _EarlierKD:
+    """The KD-tree version of _Earlier this replaced (kept for comparisons): a big KD-tree plus a small one for the
+    latest layers; the big one is rebuilt when the small one outgrows a quarter of it."""
 
     def __init__(self, R):
         self.R = R
@@ -152,14 +319,14 @@ def analyse(real, ext, layer, types, radius):
     Ly = layer[ei]
     unsupported = Q[:, 2] > radius
     gap = np.full(len(P), np.nan)
-    earlier = _Earlier(radius)
+    earlier = _Earlier(radius, Q)
     for idx in _layer_order(Ly):
         c = idx[unsupported[idx]]
         if len(c):
             unsupported[c] = ~earlier.any_within(Q[c])
             f = c[unsupported[c]]
             gap[ei[f]] = np.minimum(earlier.nearest(Q[f]), Q[f, 2])  # gap to anything printed earlier, or the bed
-        earlier.add(Q[idx])
+        earlier.add_index(idx)
     floating = np.zeros(len(P), bool)
     floating[ei[unsupported]] = True
 
@@ -226,7 +393,7 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
     seg = np.r_[0, np.linalg.norm(np.diff(Q, axis=0), axis=1)] * (np.r_[0, np.diff(run_id)] == 0)
     s_along = np.cumsum(seg)
     g = np.zeros(n, bool)
-    grounded = _Earlier(R)  # grounded points of the layers done so far
+    grounded = _Earlier(R, Q)  # grounded points of the layers done so far
     for idx in _layer_order(Ly):
         direct = (Q[idx, 2] < R) | grounded.any_within(Q[idx])
         gl = direct.copy()
@@ -237,7 +404,7 @@ def grounded_regions(P, ext, layer, types, R=1.0, reach=5.0, seg_mm=0.3):
             dist = np.min(np.abs(sa[m][:, None] - sa[m & direct][None, :]), axis=1)
             gl[np.nonzero(m)[0]] |= dist <= reach
         g[idx] = gl
-        grounded.add(Q[idx[gl]])
+        grounded.add_index(idx[gl])
     ug = ~g
     # path length each point stands for: half of the segments on either side of it within its run (points are ~0.5 mm
     # apart, so the old "count x seg_mm" understated the length)

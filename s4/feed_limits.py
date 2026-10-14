@@ -28,6 +28,112 @@ def _fmt_f(f):
 
 def apply(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
     """Rewrite the feeds in path in place. Speeds in deg/s (C, B) and mm/s (X, Z). Returns the share of moves slowed.
+    The print-time estimate is s4/print_time.py (it also counts acceleration, like R-Theta Sim).
+
+    Two passes: the first walks the file (positions, G93/G94 mode) and collects the moves that need a time, the
+    times are then computed for all moves at once (_move_times: the same float operations as _move_time, element
+    by element), and the second pass writes the lines. apply_loop is the old one-pass version."""
+    with open(path) as fh:
+        lines = fh.read().split("\n")
+    lim = {"C": max_c * 60.0, "B": max_b * 60.0, "X": max_x * 60.0, "Z": max_z * 60.0}  # per minute
+    axes = ("C", "X", "Z", "B")
+    pos = (0.0, 0.0, 20.0, 0.0)  # C X Z B
+    out = []
+    jobs = []  # (index in out, line text, kind) with kind 0 = G93 move (t0 from F), 1 = G94 triple (feed from F)
+    A, B, T0, FD = [], [], [], []
+    mode = 94
+    started = False
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        code = line.split(";", 1)[0].strip()
+        if code == "G93":
+            mode = 93
+        elif code == "G94":
+            mode = 94
+            # a G94 / move F<mm/min> / G93 triple: the writer's feedless move (F20000), or a retract emitted at a new
+            # position (the first retract of a print swings C to the first point). If it moves, make it a G93 move
+            # timed by its feed and the axis limits; E-only triples (retract in place) stay as they are.
+            if i + 2 < n and lines[i + 2].strip() == "G93" and started and lines[i + 1].startswith(("G00 C", "G01 C")):
+                w = dict(_WORD.findall(lines[i + 1].split(";", 1)[0]))
+                new = tuple(float(w[k]) for k in axes)
+                if "F" in w and new != pos:
+                    jobs.append((len(out), lines[i + 1], 1))
+                    out.append(None)
+                    A.append(pos)
+                    B.append(new)
+                    T0.append(None)
+                    FD.append(float(w["F"]))
+                    pos = new
+                    mode = 93  # the triple's closing G93 is consumed here
+                    i += 3
+                    continue
+        elif code.startswith(("G00 C", "G01 C", "G0 C", "G1 C")):
+            w = dict(_WORD.findall(code))
+            new = tuple(float(w[k]) if k in w else pos[j] for j, k in enumerate(axes))
+            if not started:  # "G0 C0 X0 Z20 B0 ; go to start"
+                started = True
+                pos = new
+                out.append(line)
+                i += 1
+                continue
+            if mode == 93 and "F" in w and new != pos:
+                jobs.append((len(out), line, 0))
+                out.append(None)
+                A.append(pos)
+                B.append(new)
+                T0.append(1.0 / float(w["F"]))
+                FD.append(None)
+                pos = new
+                i += 1
+                continue
+            pos = new
+        out.append(line)
+        i += 1
+    moves = len(jobs)
+    slowed = 0
+    if jobs:
+        t = _move_times(np.array(A), np.array(B), T0, FD, lim, nozzle_offset).tolist()
+        for (k, line, kind), tk, t0 in zip(jobs, t, T0):
+            if kind == 1:
+                out[k] = re.sub(r" F-?[\d.eE+-]+", " F" + _fmt_f(1.0 / tk), line.rstrip())
+            elif tk > t0 * (1 + 1e-9):
+                slowed += 1
+                out[k] = re.sub(r" F-?[\d.eE+-]+", " F" + _fmt_f(1.0 / tk), line.rstrip())
+            else:
+                out[k] = line
+    with open(path, "w") as fh:
+        fh.write("\n".join(out))
+    return {"moves_slowed_pct": round(100.0 * slowed / max(moves, 1), 1)}
+
+
+def _pymax(a, b):
+    """Python's max(a, b) element by element (b only where it is larger)."""
+    return np.where(b > a, b, a)
+
+
+def _move_times(A, B, T0, FD, lim, L):
+    """_move_time for many moves: A, B (m, 4) as C X Z B; T0 / FD per move (None = not given). Minutes."""
+    m = len(A)
+    t0 = np.array([0.0 if v is None else v for v in T0])
+    t = np.where(np.array([bool(v) for v in T0]), t0, 0.0)  # t0 or 0.0
+    has_feed = np.array([bool(v) for v in FD])
+    if has_feed.any():
+        feed = np.array([v if v else 1.0 for v in FD])
+        ta = np.column_stack(nozzle_tip(A[:, 0], A[:, 1], A[:, 2], A[:, 3], L))
+        tb = np.column_stack(nozzle_tip(B[:, 0], B[:, 1], B[:, 2], B[:, 3], L))
+        dist = np.linalg.norm(tb - ta, axis=1)  # row by row the same as the 1-D norm
+        t = np.where(has_feed, _pymax(t, dist / feed), t)
+    col = {"C": 0, "X": 1, "Z": 2, "B": 3}
+    for k, v in lim.items():
+        if v > 0:
+            t = _pymax(t, np.abs(B[:, col[k]] - A[:, col[k]]) / v)
+    return _pymax(t, np.full(m, 1e-9))
+
+
+def apply_loop(path, max_c, max_b, max_x, max_z, nozzle_offset=42.0):
+    """Rewrite the feeds in path in place. Speeds in deg/s (C, B) and mm/s (X, Z). Returns the share of moves slowed.
     The print-time estimate is s4/print_time.py (it also counts acceleration, like R-Theta Sim)."""
     with open(path) as fh:
         lines = fh.read().split("\n")
