@@ -6,6 +6,7 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 `benchy upsidedown tilted` (33,156 tets) and `pi 3mm` models with default settings, unless noted.
 
 **Entries**
+- [2026-10-14: Faster pipeline, same output; denser meshes (TET_MAX_VOLUME)](#2026-10-14-faster-pipeline-same-output-denser-meshes-tet_max_volume)
 - [2026-10-14: Where the path roughness comes from; opt-in smoother mapping](#2026-10-14-where-the-path-roughness-comes-from-opt-in-smoother-mapping)
 - [2026-10-07: Meshes with CAD-export junk, support check on large prints](#2026-10-07-meshes-with-cad-export-junk-support-check-on-large-prints)
 - [2026-10-01: Smoother lifted surfaces, six-model quality suite](#2026-10-01-smoother-lifted-surfaces-six-model-quality-suite)
@@ -18,6 +19,37 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 - [2026-09-27: Island-free deformation](#2026-09-27-island-free-deformation)
 - [2026-09-26: Output fixes, build profiles, docs](#2026-09-26-output-fixes-build-profiles-docs)
 - [2026-09-25: Headless pipeline](#2026-09-25-headless-pipeline)
+
+---
+
+## 2026-10-14: Faster pipeline, same output; denser meshes (TET_MAX_VOLUME)
+
+Output unchanged: the final G-code and `deformed_points.npy` of benchy upsidedown tilted, B axis mount 5mm, dino and
+axis model w markers2 are byte-identical to before (same planar G-code; all but the `pipeline_version` /
+`planar_gcode` header lines), and the gates pass (notebook-exact, equivalence twice, print-time parity).
+
+- **Mesh setup:** the cell graph's edge lengths in one row-wise norm (the per-edge loop of 1-D norms took 13 s on
+  the benchy); networkx's graph and `multi_source_dijkstra` replaced by a numba replay of the same search (heap
+  order by distance then push count, networkx's neighbour order, the same additions), so distances, closest bottom
+  cells and the in-air test are identical. Benchy 15.6 -> 6.7 s, axis model 23 -> 10 s.
+- **Support check** (34 -> 3 s on the benchy, 82 -> 5.5 s on the axis model): reuses the deform's tet mesh (no
+  second TetGen run) and the mapper's parse and mapping of the planar points (the same numbers); layers and types
+  from the parse's line numbers; the "anything printed earlier within 1 mm" queries on one static numba hash grid
+  instead of KD-trees rebuilt every layer (same distance test, same answers on all four models); the distance to the
+  surface only for points outside the part.
+- **Map:** the planar G-code parse vectorised (same float operations, ~3x faster) and cached for the support
+  check; axis speed limits compute all move times at once.
+- **Poles check and print-time estimate** run in a worker process while the support check runs (`S4_NO_WORKER=1`
+  runs them in-process). The end of the run is timed now too (`poles + print-time estimate`, `settings header`).
+- **`TET_MAX_VOLUME`** (deform, default null = TetGen's default mesh, unchanged): largest tet volume in mm^3, for
+  denser meshes. Benchy: 0.3 -> 102k tets (3.1x), deform 220 s (rotation field 105 s, deformation 93 s, about
+  linear in the tet count). The header says `tetrahedralize = fixedvolume, maxvolume ...` when it is set.
+
+Whole runs (same planar G-code): dino 77 -> 48 s, B axis mount 112 -> 82 s, benchy 164 -> 123 s, axis model
+292 -> 197 s. Per stage: [DEVELOPING.md](docs/DEVELOPING.md#where-the-time-goes). Not faster yet: the rotation-field
+least squares and the `island_free` solve, now most of the time. A numba port of scipy's LSMR (bit-identical, it
+calls numpy's own BLAS dot) was tried and dropped: the time is in OpenBLAS's threaded dot products (~0.5 ms each
+here) and the sparse mat-vecs, not in Python, so it saved nothing.
 
 ---
 

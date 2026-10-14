@@ -7,6 +7,7 @@ For people changing the code. Using the pipeline is in [S4_PIPELINE.md](../S4_PI
 - [The rules](#the-rules)
 - [Checking code changes](#checking-code-changes)
 - [How it works](#how-it-works)
+- [Where the time goes](#where-the-time-goes)
 - [Modules](#modules)
 
 ## The rules
@@ -102,6 +103,40 @@ stacked on top of it. The finer, local view counts points with nothing printed e
 runs into island, cantilever and bridge by what their ends connect to. `check_planar()` runs the same check on
 Cura's planar toolpath, to separate the shape's problems from the mapping's.
 
+## Where the time goes
+
+Every run writes `build/<model>/timings_fast.json` (the stage tree, `s4/timing.py`); the log ends with the same
+tree. Seconds per stage with the same planar G-code (`--sliced-gcode`, no CuraEngine), default settings, before and
+after the 2026-10-14 speed-ups (on a 24-thread PC that was not idle, so expect ±15 % noise):
+
+| stage | dino (4k tets) | B axis mount 5mm (21k) | benchy upsidedown tilted (33k) | axis model w markers2 (50k) |
+|---|---|---|---|---|
+| mesh setup | 1.5 -> 1.4 | 9.1 -> 4.0 | 15.6 -> 6.7 | 23.0 -> 10.1 |
+| rotation field (TRF least squares) | 7.2 | 20.6 | 36.0 | 38.3 |
+| deformation (`island_free` fit + lift) | 0.7 | 14.0 | 31.7 | 64.4 |
+| map, incl. axis speed limits | 20.0 -> 18.7 | 21.8 -> 20.4 | 26.6 -> 22.9 | 49.4 -> 43.9 |
+| support check | 31.1 -> 2.8 | 28.4 -> 2.9 | 34.0 -> 3.2 | 82.1 -> 5.5 |
+| poles + print-time estimate, after the support check | 6.3 -> 8.5 | 6.8 -> 8.6 | 7.9 -> 12.1 | 12.0 -> 20.3 |
+| whole run | 77 -> 48 | 112 -> 82 | 164 -> 123 | 292\* -> 197 |
+
+(\* the run with CuraEngine; the `--sliced-gcode` one took 992 s, 12 minutes of it in a then untimed step at the end
+(poles check or settings header, now timed) that did not recur. The rows without an arrow did not change. The poles check and the print-time estimate now run in a worker process
+during the support check; the row is the wait after it.) What is left is mostly the two solvers: the rotation field
+(scipy's TRF with LSMR; its time goes into sparse mat-vecs and OpenBLAS dot products, not Python) and the
+`island_free` L-BFGS. Both scale about linearly with the tet count: the benchy at `TET_MAX_VOLUME` 0.3 (102k tets,
+3.1x) took 107 s for the rotation field and 93 s for the deformation (3.1x and 2.9x), mesh setup 20 s (13 s of it the
+neighbour lists, still Python sets). The map, the support check and the print-time estimate scale with the G-code
+(points), not with the mesh.
+
+**Speed-ups must not change a byte** (rule 1 and 3). What is safe: per-element work in parallel (each tet, row or
+query point computed on its own, in the same operation order), vectorising a loop with the same float operations
+(a row-wise `np.linalg.norm(a, axis=1)` gives the same values as 1-D norms; numpy's `sin`/`cos` give the same values
+on arrays as on scalars), caching a result that would be recomputed identically, and running independent stages at
+the same time. What is not: any reduction whose summation order changes (parallel sums, BLAS dot products with a
+different thread count, `np.add.at` -> `bincount`), different tie-breaking in searches (that is why the Dijkstra is a
+replay of networkx's, heap order included), and Python's `x ** 2`, which is not always `x * x`. Check with the gates
+and by byte-comparing the final G-code and `deformed_points.npy` of several models on the same planar G-code.
+
 ## Modules
 
 | module | role |
@@ -111,7 +146,7 @@ Cura's planar toolpath, to separate the shape's problems from the mapping's.
 | `s4/profile.py` | build profiles: finds and loads the JSON, applies `--set` / `--cura-set`, rejects typos, writes `params_used.json` |
 | `s4/params.py` | the default `deform` settings and the multi-iteration schedule |
 | `s4/meshio_s4.py` | mesh loading, tetrahedralisation and VTK helpers shared by the fast code |
-| `s4/fast_deform.py` | tilt field (notebook cells 2-11) and the notebook-method deformation, numerically equal to the reference |
+| `s4/fast_deform.py` | tilt field (notebook cells 2-11) and the notebook-method deformation, numerically equal to the reference; the cell graph's Dijkstra is a numba replay of networkx's |
 | `s4/fast_lsq.py` | numba-accelerated sparse least-squares for the notebook-method solve, bit-identical to scipy's |
 | `s4/island_free.py` | the `island_free` method: the fit-then-lift driver, the priority flood that finds pits, and the lift targets |
 | `s4/island_free_solver.py` | the fit solver behind it: the penalty and barrier problems and their L-BFGS minimiser |
@@ -121,7 +156,7 @@ Cura's planar toolpath, to separate the shape's problems from the mapping's.
 | `s4/feed_limits.py` | post-processing: stretches each move's G93 time so no axis exceeds its speed limit |
 | `s4/sim_header.py` | builds the settings block at the top of the G-code, for R-Theta Sim |
 | `s4/print_time.py` | print-time estimate, a port of R-Theta Sim's parser and planner |
-| `s4/support_check.py` | the `[support]` check (ungrounded, island, cantilever, bridge) |
+| `s4/support_check.py` | the `[support]` check (ungrounded, island, cantilever, bridge); reuses the deform's mesh and the mapper's mapped points, earlier-layer queries on a numba hash grid |
 | `s4/quality.py` | the `[quality]` check (poles, extrusion along the nozzle axis) and the path-roughness measure |
 | `s4/reference.py` | the golden reference: a line-for-line port of `main.ipynb` |
 | `s4/timing.py` | nested stage timer used by both implementations |
