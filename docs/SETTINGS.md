@@ -50,6 +50,24 @@ from it.
 | `ROTATION_ITERATIONS` | 100 | solver budget for the tilt field. Changing it changes the result, not just the speed |
 | `iterations` | (none) | multi-iteration schedule, see above |
 
+### Pit-free tilt field (changes Byrd's field; off by default)
+Not in the notebook, and the one setting that changes the rotation field itself (on branch `pitfree-work`; rule 3 of
+[DEVELOPING.md](DEVELOPING.md#the-rules) is relaxed for it). With `PIT_FREE_ROUNDS` > 0, `island_free` fits the
+notebook's field, finds the pits the fit leaves (local height minima off the bed: the islands), and changes the field
+where it makes them, until there are none; the lift then has nothing (or little) to do. How:
+`s4/island_free.py` `pit_free_field`. 0 = the notebook's field, unchanged. `island_free` + `FIT_METHOD: penalty` only.
+
+| setting | default | what it does |
+|---|---|---|
+| `PIT_FREE_ROUNDS` | 0 (off) | at most this many correction rounds (one fit each, ~1 s on the benchy); stops early when no pit is left |
+| `PIT_FREE_SLOPE` | 0 | a vertex is in a pit if it can't be reached from the bed by a path rising at least this many mm per mm. 0 = true local minima only; 0.05 also opens nearly flat dips. Set `ISLAND_LIFT_SLOPE` to the same value and the lift finds nothing left to lift |
+| `PIT_FREE_MAX_STEP` | 10 | degrees: the most any tet's angle changes in one round |
+| `PIT_FREE_SMOOTH` | 4 | mm: each round's change is spread smoothly over about this distance |
+| `PIT_FREE_FRACTION` | 0.7 | each round aims to remove this fraction of the total pit depth (linear model) |
+
+The benchy profile for it is `params/benchy upsidedown tilted (pit-free).json` (pass it with `--params`). Numbers
+are in the [CHANGELOG](../CHANGELOG.md#2026-10-14-pit-free-tilt-field-opt-in).
+
 ### Turning the field into a shape
 | setting | default | what it does |
 |---|---|---|
@@ -146,7 +164,8 @@ Whatever the profile says, these are always enforced, because the mapper depends
 This is also the answer to "which setting turns on which fix". All of these are on by default. `--notebook-exact`
 turns every one of them off and reproduces the notebook's output byte for byte (everything after the
 [settings block](../S4_PIPELINE.md#the-settings-block-at-the-top-of-the-g-code)). The rotation (tilt) field is the
-notebook's in every case.
+notebook's in every case, unless `PIT_FREE_ROUNDS` > 0 (off by default; see
+[Pit-free tilt field](#pit-free-tilt-field-changes-byrds-field-off-by-default)).
 
 | what | setting | difference |
 |---|---|---|

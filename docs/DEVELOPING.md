@@ -21,6 +21,7 @@ For people changing the code. Using the pipeline is in [S4_PIPELINE.md](../S4_PI
 3. **Byrd's math stays untouched.** The rotation (tilt) field and its smoothing are Joshua Bird's, and are copied
    as they are, including the quartic smoothing. Changes replace the step *after* the field (the deformed shape) or
    the steps around the mapping, never the field itself. The fast code may only be faster, never different.
+   One exception, opt-in and off by default: `PIT_FREE_ROUNDS` (below) changes the field where the fit leaves pits.
 4. **Run the six-model suite before changing a default.** A fix for one model must not hurt the others.
 5. **Compare runs on the same planar G-code** (`--sliced-gcode`), because CuraEngine isn't deterministic.
 6. **Log what you changed.** After a change that affects output, add an entry to [CHANGELOG.md](../CHANGELOG.md),
@@ -82,6 +83,13 @@ two steps:
   height targets, and the fit is solved again. Those regions then print later, growing out from where they're
   attached. How the lift holds the rest of the part still is described in the
   [CHANGELOG](../CHANGELOG.md#2026-10-01-smoother-lifted-surfaces-six-model-quality-suite).
+
+- **pit-free field** (opt-in, `PIT_FREE_ROUNDS` > 0, between the two): the one step that changes the notebook's tilt
+  field. The fit's height is, to first order, h = K^-1 b(theta) (K the mesh stiffness, b the per-tet target
+  rotations' third rows); the priority flood gives each pit vertex its depth below the rim it spills over, and one
+  adjoint solve gives the derivative of the total pit depth with respect to every tet's angle. That gradient, spread
+  smoothly (`PIT_FREE_SMOOTH`), is the change of the field; capped steps (`PIT_FREE_MAX_STEP`), one fit per round,
+  until no pit is left. Both implementations run it (it is inside `island_free`).
 
 `DEFORMATION_METHOD: notebook` uses the notebook's own least-squares solve instead. Before/after numbers are in the
 [CHANGELOG](../CHANGELOG.md#2026-09-27-island-free-deformation).

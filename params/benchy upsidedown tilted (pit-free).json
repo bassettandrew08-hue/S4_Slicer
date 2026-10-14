@@ -1,0 +1,8 @@
+{
+  "description": "Pit-free rotation field (CHANGELOG 2026-10-14, pit-free field): the built-in settings plus PIT_FREE_ROUNDS, which changes Byrd's rotation field where the fit leaves pits (local height minima off the bed) until there are none, so the island lift has nothing to do (its slope matches, it stays as a safety net). Use with --params; the hull profile params/benchy upsidedown tilted.json is not applied then. No-lift run: island seeds 5 -> 0, ungrounded walls 1789 -> 27 mm; hull layer_turns 384 -> 401 (lift: 538).",
+  "deform": {
+    "PIT_FREE_ROUNDS": 30,
+    "PIT_FREE_SLOPE": 0.05,
+    "ISLAND_LIFT_SLOPE": 0.05
+  }
+}

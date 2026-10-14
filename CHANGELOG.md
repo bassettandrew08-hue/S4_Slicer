@@ -6,6 +6,7 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 `benchy upsidedown tilted` (33,156 tets) and `pi 3mm` models with default settings, unless noted.
 
 **Entries**
+- [2026-10-14: Pit-free tilt field (opt-in)](#2026-10-14-pit-free-tilt-field-opt-in)
 - [2026-10-14: Faster pipeline, same output; denser meshes (TET_MAX_VOLUME)](#2026-10-14-faster-pipeline-same-output-denser-meshes-tet_max_volume)
 - [2026-10-14: The benchy's choppy hull; mesh density setting](#2026-10-14-the-benchys-choppy-hull-mesh-density-setting)
 - [2026-10-14: Where the path roughness comes from; opt-in smoother mapping](#2026-10-14-where-the-path-roughness-comes-from-opt-in-smoother-mapping)
@@ -20,6 +21,70 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 - [2026-09-27: Island-free deformation](#2026-09-27-island-free-deformation)
 - [2026-09-26: Output fixes, build profiles, docs](#2026-09-26-output-fixes-build-profiles-docs)
 - [2026-09-25: Headless pipeline](#2026-09-25-headless-pipeline)
+
+---
+
+## 2026-10-14: Pit-free tilt field (opt-in)
+
+### Why
+With the fit alone (`ISLAND_LIFT_ROUNDS=0`, built-in settings) the benchy's hull draws its layer lines in clean bands
+(hull `layer_turns` 384), but the fit leaves 5 pits: local height minima off the bed (island seeds 5, mass 302), two of
+them on the hull sides (x -4, y +-13.5, z 33-35) whose first loops print up to 7.3 mm above anything earlier (1789 mm
+of ungrounded wall). The notebook's own deformation has the same pits. They come from the tilt field: over a patch of
+hull that faces down and slightly inwards, the field's ~45 deg tilt turns the surface almost exactly face-down.
+
+### Added
+- **`PIT_FREE_ROUNDS`** (deform, default 0 = off, the notebook's field unchanged) and `PIT_FREE_SLOPE`,
+  `PIT_FREE_MAX_STEP`, `PIT_FREE_SMOOTH`, `PIT_FREE_FRACTION` ([SETTINGS.md](docs/SETTINGS.md#pit-free-tilt-field-changes-byrds-field-off-by-default)).
+  **This changes Joshua Bird's rotation field** (rule 3 is relaxed for it; off, nothing changes). After the
+  notebook's field is fitted, `island_free.pit_free_field` repeats: priority flood (slope `PIT_FREE_SLOPE`) -> each
+  pit vertex's depth below the rim it spills over; the derivative of the total depth with respect to every tet's angle
+  by one adjoint solve of the linear fit (h = K^-1 b(theta)); that gradient spread over `PIT_FREE_SMOOTH` mm; a step
+  that removes 70% of the depth in the linear model, at most `PIT_FREE_MAX_STEP` deg per tet; fit again. It stops when
+  no pit is left. The lift runs after it as before and finds (almost) nothing.
+- `priority_flood(..., spill=True)` also returns each vertex's spill (rim) vertex; heights unchanged.
+- **`params/benchy upsidedown tilted (pit-free).json`** (use with `--params`): built-in settings plus
+  `PIT_FREE_ROUNDS` 30, `PIT_FREE_SLOPE` 0.05 and `ISLAND_LIFT_SLOPE` 0.05 (the lift stays as a safety net and lifts
+  0 vertices).
+
+### Benchy (built-in settings unless noted; each run sliced by Cura again)
+| | fit only, no lift | default lift | hull profile (lift) | pit-free, slope 0, no lift | **pit-free profile** (slope 0.05) | pit-free, slope 0.2, no lift |
+|---|---|---|---|---|---|---|
+| island seeds / mass | 5 / 302 | | | 0 / 0 | **0 / 0** | 0 / 0 |
+| lifted vertices | 0 | 977 | 570 | 0 | **0** | 0 |
+| hull `layer_turns` | 384 | 538 | 411 | 394 | **401** | 415 |
+| ungrounded walls | 1789 mm | 21.9 mm | 1.8 mm | 18.7 mm | **26.9 mm** | 16.5 mm |
+| island / cantilever walls | 38.0 / 11.5 mm | 10.5 / 1.0 mm | 2.6 / 6.9 mm | 23.0 / 21.8 mm | **14.8 / 5.6 mm** | 17.2 / 4.4 mm |
+| zigzag | 4670 | 4629 | 3933 | 4686 | **4751** | 4751 |
+| tilt | 48.0 deg | 49.4 deg | 56.5 deg | 49.8 deg | **50.0 deg** | 51.4 deg |
+| print time | 145.8 min | 151.3 min | 160.6 min | 148.0 min | **152.0 min** | 157.9 min |
+| field change, mean / max | | | | 3.9 / 113 deg | **4.3 / 100 deg** | 8.0 / 114 deg |
+| deform time added | | | | 23 s | **17 s** | 33 s |
+
+What is left: the ~24 mm of SKIN at (23.5, -0.3, 41.8) in the last layers (in every no-lift run, not a pit: no vertex
+there is below its flood level), and 9 points of outer wall. In R-Theta Sim the hull side builds up from earlier
+layers where the no-lift run printed a band in mid-air; the hull is banded except one small patch of smooth concentric
+rings where the pit was (smaller than the hull profile's). Those rings are a topological leftover: removing a pit
+lifts its floor to the rim, and the surface there is then nearly level (the flood level), so the layers draw closed
+loops on it. A full cure needs the layers to keep crossing that patch at an angle, which none of the variants below
+reached.
+
+### Six-model suite, on as a default (`PIT_FREE_ROUNDS=30 PIT_FREE_SLOPE=0.05`, profiles and lift as usual)
+Squirtle, dino, z mount unchanged. pi: `zigzag_bridge_underside` 22 -> 28, tilt 37.5 -> 35.0; benchy (with the hull
+profile): cantilever walls 6.9 -> 13.9 mm, hull `layer_turns` 412; B axis mount: ungrounded walls 1.3 -> 3.5 mm. So it
+is not a default; the benchy profile above is the way to use it. Gates pass with it off (notebook-exact, equivalence
+x2, print-time parity).
+
+### Tried and not adopted (benchy, deform only unless noted)
+| change | result |
+|---|---|
+| pull the pits towards a harmonic fill of their neighbourhood (smoothest height, no inner extremum), descent or Gauss-Newton (CGLS) | does not converge to pit-free (fits can't follow a flattened height: rotations keep the height gradient at 1); GN changes the field by 18.6 deg on average, `layer_turns` 406 |
+| a smooth patch of extra tilt around each pit (towards sideways), grown until the pit opens | pit-free at slope 0, `layer_turns` 397; full run: ungrounded walls 28.6, island 19.5, cantilever 5.6 mm; same rings; at slope 0.2 it stalls (no direction removes those dips) |
+| a fixed -40 to -100 deg extra-tilt bump over both hull pits | opens them (`layer_turns` 392-413) but adds minima and maxima on the hull at the bump's edge |
+| more weight on the notebook's overhang targets in pit cells (x10 per round, re-optimise the field) | worse: pit depth 119 -> 132, `layer_turns` 443 |
+| `PIT_FREE_SLOPE` 0.13 (full run) | island / cantilever walls 11.9 / 9.6 mm, ungrounded walls 24.6 mm, `layer_turns` 408 |
+
+The code for these is not kept.
 
 ---
 

@@ -4,7 +4,7 @@ Island-free, fold-free deformation (DEFORMATION_METHOD = "island_free").
 The notebook turns the optimised rotation field into a deformed mesh with an unconverged least-squares solve.
 That solve folds the mesh (202 inverted tets on the benchy) and, more importantly, leaves local height minima
 in the deformed shape. A planar slicer starts printing every such minimum in mid-air: those are the floating
-islands. This module replaces only that step; the rotation field is still the notebook's.
+islands. This module replaces only that step; the rotation field is still the notebook's (unless PIT_FREE_ROUNDS).
 
 1. Fold-free fit (FIT_METHOD "barrier"; the default "penalty" replaces the barrier below by a soft penalty on
    tets squashed below FOLD_PENALTY_DET, see PenaltyProblem). Minimise over vertex positions V
@@ -20,6 +20,9 @@ islands. This module replaces only that step; the rotation field is still the no
    isn't in a pit is held at its fit-only height (LIFT_HOLD), so only the pits move: an unanchored lift mostly moved
    the whole part up, and its stale targets pulled vertices back down (creases). The lift solves use their own
    preconditioner floor (LIFT_PRECOND_FLOOR) so vertices held only by micro-tets don't take huge steps.
+
+Opt-in (PIT_FREE_ROUNDS > 0), between 1 and 2: pit_free_field changes the rotation field itself where the fit
+leaves pits, until there are none (the one place the notebook's field is changed; off by default).
 
 The solvers (numba kernels, FitProblem, PenaltyProblem) are in s4/island_free_solver.py. Deterministic: all
 per-tet work is written to arrays and reduced serially.
@@ -172,12 +175,12 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
          level at which it is reachable from the bed) and the rim vertex its pit spills over;
       2. the pit depth P = sum_v d_v (h_rim(v) - h_v) is differentiated with respect to every tet's angle with one
          adjoint solve, lam = K^-1 a (a = -d_v at the pit vertices, +d_v at their rims):
-         dP/dtheta_c = vol_c (G_c lam_c) . dg_c/dtheta_c;
+         dP/dtheta_c = vol_c sum_k lam_ck (G_ck . dg_c/dtheta_c);
       3. that gradient (per unit volume) is spread smoothly, (M + s^2 K) u = M g on the vertices (M lumped volume,
          s = PIT_FREE_SMOOTH mm), back to the tets as the mean of their vertices;
       4. theta -= a u, a chosen so the linear model removes PIT_FREE_FRACTION of P, but no tet's angle changes by more
-         than PIT_FREE_MAX_STEP deg; then the fit is solved again for the new field.
-    Stops when no vertex is more than 0.02 mm deep in a pit. Returns (rotation field, R, V, rounds, pit_info)."""
+         than PIT_FREE_MAX_STEP deg; then the fit is solved again for the new field (solve(R) -> V).
+    Stops when no vertex is more than 0.02 mm deep in a pit. Returns (rotation field, R, V, info)."""
     from scipy.sparse import diags, identity
     from scipy.sparse.linalg import splu
     n = prob.n
@@ -188,28 +191,32 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
     lu = splu((K + 1e-9 * np.median(K.diagonal()) * identity(n, format="csc")).tocsc())
     zt = np.cross(np.array([0.0, 0.0, 1.0]), tangential_vectors(cell_centers))
     s = float(q["PIT_FREE_SMOOTH"])
-    Mv = np.zeros(n)
-    np.add.at(Mv, cells.ravel(), np.repeat(prob.vol / 4, 4))
-    smooth = splu((diags(Mv) + s * s * K).tocsc()) if s > 0 else None
+    smooth = None
+    if s > 0:
+        Mv = np.zeros(n)
+        np.add.at(Mv, cells.ravel(), np.repeat(prob.vol / 4, 4))
+        smooth = splu((diags(Mv) + s * s * K).tocsc())
     rf = np.asarray(rotation_field, np.float64).copy()
     slope = float(q["PIT_FREE_SLOPE"])
+    rounds = int(q["PIT_FREE_ROUNDS"])
+    R = rotation_matrices(cell_centers, rf)
     first = None
     k = 0
-    R = rotation_matrices(cell_centers, rf)
-    for k in range(int(q["PIT_FREE_ROUNDS"]) + 1):
+    for k in range(rounds + 1):
         h, src = priority_flood(V, nbrs, slope, bed_tol=0.5, bed=_grounded(V, bed), spill=True)
         d = h - V[:, 2]
         pit = np.nonzero(d > 0.02)[0]
+        depth = float(d[pit].sum())
         if first is None:
-            first = (len(pit), float(d[pit].sum()))
-        if not len(pit) or k == int(q["PIT_FREE_ROUNDS"]):
+            first = (len(pit), depth)
+        if not len(pit) or k == rounds:
             break
         a = np.zeros(n)
         np.add.at(a, pit, -d[pit])
         np.add.at(a, src[pit], d[pit])
         lam = lu.solve(a)
         dg = -np.sin(rf)[:, None] * np.array([0.0, 0.0, 1.0]) + np.cos(rf)[:, None] * zt
-        grad = prob.vol * np.einsum("cj,cj->c", np.einsum("ck,ckj->cj", lam[cells], G), dg)  # dP/dtheta
+        grad = prob.vol * np.einsum("ck,ck->c", np.einsum("ckj,cj->ck", G, dg), lam[cells])  # dP/dtheta
         u = grad / prob.vol
         if smooth is not None:
             gv = np.zeros(n)
@@ -219,12 +226,12 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
         gu = float(grad @ u)
         if umax <= 0 or gu <= 0:
             break
-        step = min(float(q["PIT_FREE_FRACTION"]) * float(d[pit].sum()) / gu, np.radians(float(q["PIT_FREE_MAX_STEP"])) / umax)
+        step = min(float(q["PIT_FREE_FRACTION"]) * depth / gu, np.radians(float(q["PIT_FREE_MAX_STEP"])) / umax)
         rf -= step * u
         R = rotation_matrices(cell_centers, rf)
         V = solve(R)
     info = {"pit_vertices_before": first[0], "pit_depth_before": round(first[1], 2), "pit_vertices": len(pit),
-            "pit_depth": round(float(d[pit].sum()), 2), "pit_free_rounds": k}
+            "pit_depth": round(depth, 2), "pit_free_rounds": k}
     return rf, R, V, info
 
 
