@@ -206,6 +206,7 @@ details.inner > summary::after { order: -1; margin: 0 2px 0 0; }
       <label class="tog">Follow the nozzle <input type="checkbox" id="follow"></label>
       <label class="tog">Printed plastic <input type="checkbox" id="showbeads" checked></label>
       <label class="tog">Upcoming path <input type="checkbox" id="showpreview" checked></label>
+      <label class="tog">Travel and retractions <input type="checkbox" id="showtravel"></label>
       <div class="field"><label for="colormode">Color by</label>
         <select id="colormode"><option value="tilt">Nozzle tilt (B)</option><option value="flow">Plastic per mm</option><option value="support">Support check</option><option value="height">Height</option><option value="rough">Path roughness</option><option value="solid">Filament</option></select>
       </div>
@@ -350,6 +351,8 @@ const DEFAULTS = {
   // Display
   beadWidth: 0.45,
   beadArcDeg: 3,
+  beadShape: 'flow',
+  beadHeight: 0, // 0 = the file's layer height (else layerH)
 };
 
 const SCHEMA = [
@@ -414,6 +417,8 @@ const SCHEMA = [
   { group: 'Display', items: [
     ['beadWidth', 'Bead width', 'mm', ''],
     ['beadArcDeg', 'Bead smoothness', 'deg per segment', 'Lower is smoother on large C moves.'],
+    ['beadShape', 'Bead shape', 'select', 'From the plastic: as thick as a layer (along the nozzle) and as wide as the E value fills, hanging below the nozzle tip.', [['flow','From the plastic laid'],['round','Round, bead width']]],
+    ['beadHeight', 'Bead thickness', 'mm', '0 uses the layer height in the file header (or the support-check layer height). Beads on the bed are as thick as the gap under the tip.'],
   ]},
 ];
 
@@ -1144,7 +1149,7 @@ loadStoredSettings();
 let P = null, srcLines = null, srcName = '';
 let T = 0, playing = false, speedMul = 10;
 let issues = [];
-const view = { bedFrame: false, follow: false, beads: true, preview: true, color: 'tilt' };
+const view = { bedFrame: false, follow: false, beads: true, preview: true, travels: false, color: 'tilt' };
 const manual = { active: false, cur: [0, 0, 0, 0], tgt: [0, 0, 0, 0] };
 const ST = { i: 0, frac: 0, s: [0, 0, 0, 0, 0], c: [0, 0, 0, 0, 0] };
 
@@ -1153,38 +1158,70 @@ const vp = $('#viewport');
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setClearColor(0x000000, 0);
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 vp.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(38, 1, 1, 5000);
-scene.add(new THREE.HemisphereLight(0xe9eef4, 0x151a20, 0.9));
-const keyLight = new THREE.DirectionalLight(0xfff6ea, 0.8); keyLight.position.set(260, 460, 320); scene.add(keyLight);
-const rimLight = new THREE.DirectionalLight(0x9cc4ff, 0.35); rimLight.position.set(-320, 220, -280); scene.add(rimLight);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.5, 5000);
+const SHADOW_CAST_MAX = 400000; // bead segments: above this the part casts no shadow (it would double the draw cost)
+// Image-based light: a small studio (soft boxes over a dark floor) baked into an environment map, so metal and
+// plastic get real reflections instead of flat shading.
+(() => {
+  const env = new THREE.Scene();
+  const g = new THREE.SphereGeometry(100, 32, 16), col = [], p = g.attributes.position;
+  for (let k = 0; k < p.count; k++) { const t = p.getY(k) / 100; const v = t > 0 ? 0.16 + 0.22 * t : 0.05 + 0.11 * (1 + t); col.push(v * 0.95, v, v * 1.08); }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  env.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ side: THREE.BackSide, vertexColors: true })));
+  const box = (w, h, x, y, z, v) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(v, v, v * 0.97), side: THREE.DoubleSide })); m.position.set(x, y, z); m.lookAt(0, 0, 0); env.add(m); };
+  box(70, 40, 30, 80, 40, 3.2); box(50, 90, -85, 25, -30, 1.4); box(90, 20, 0, 30, -90, 0.9); box(40, 40, 60, 10, -70, 0.7);
+  const pm = new THREE.PMREMGenerator(renderer);
+  scene.environment = pm.fromScene(env, 0.02).texture;
+  pm.dispose();
+})();
+scene.add(new THREE.HemisphereLight(0xe9eef4, 0x151a20, 0.45));
+const keyLight = new THREE.DirectionalLight(0xfff4e6, 0.75); keyLight.position.set(220, 520, 260); scene.add(keyLight);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.bias = -0.0004; keyLight.shadow.normalBias = 0.25; keyLight.shadow.radius = 3;
+const rimLight = new THREE.DirectionalLight(0x9cc4ff, 0.3); rimLight.position.set(-320, 220, -280); scene.add(rimLight);
+function fitShadow() { // the shadow camera covers the bed and the head's reach
+  const R = Math.max(S.bedDiameter / 2, S.xMax) + 40, c = keyLight.shadow.camera;
+  c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.near = 100; c.far = 1400; c.updateProjectionMatrix();
+}
 // Floor shadow lives outside the rotating root, and is round, so "hold the bed still" never makes it spin
 const floor = new THREE.Mesh(new THREE.CircleGeometry(460, 96), new THREE.MeshBasicMaterial({ color: 0x0b0e12, transparent: true, opacity: 0.35, depthWrite: false }));
 floor.rotation.x = -Math.PI / 2; floor.position.y = -8; scene.add(floor);
 const root = new THREE.Group(); scene.add(root);
-let bedGroup, headGroup, tipObj, arm, zCar, column, beadMesh, markerMesh, previewLine, beadGeo;
-const matFrame = new THREE.MeshStandardMaterial({ color: '#3b4350', metalness: 0.55, roughness: 0.5 });
-const matAlu = new THREE.MeshStandardMaterial({ color: '#b3bcc6', metalness: 0.6, roughness: 0.38 });
-const matPrinted = new THREE.MeshStandardMaterial({ color: '#2c323a', roughness: 0.75 });
-const matBlock = new THREE.MeshStandardMaterial({ color: '#c9ced4', metalness: 0.7, roughness: 0.32 });
-const matBrass = new THREE.MeshStandardMaterial({ color: '#d6a650', metalness: 0.85, roughness: 0.25 });
-const matBead = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.6 });
+let bedGroup, headGroup, tipObj, arm, zCar, column, beadMesh, markerMesh, previewLine, beadGeo, liveBead, travelLines, retractPts;
+const matFrame = new THREE.MeshStandardMaterial({ color: '#3b4350', metalness: 0.6, roughness: 0.45 });
+const matAlu = new THREE.MeshStandardMaterial({ color: '#c3cbd4', metalness: 0.85, roughness: 0.32 });
+const matPrinted = new THREE.MeshStandardMaterial({ color: '#2c323a', roughness: 0.62 });
+const matBlock = new THREE.MeshStandardMaterial({ color: '#d4d8dd', metalness: 0.9, roughness: 0.28 });
+const matBrass = new THREE.MeshStandardMaterial({ color: '#e0ad55', metalness: 1, roughness: 0.22 });
+const matBead = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.48, metalness: 0, envMapIntensity: 0.7 });
+const matLive = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.48, metalness: 0, envMapIntensity: 0.7 });
+let sceneDirty = true; const invalidate = () => { sceneDirty = true; };
+const PREVIEW_MOVES = 400, PREVIEW_VERTS = PREVIEW_MOVES * 2 * 16;
 
 function buildMachine() {
   root.clear();
+  fitShadow();
   const bedR = S.bedDiameter / 2, L = S.nozzleOffset;
   bedGroup = new THREE.Group(); root.add(bedGroup);
-  const plate = new THREE.Mesh(new THREE.CylinderGeometry(bedR, bedR, 4, 128), new THREE.MeshStandardMaterial({ color: '#262c33', metalness: 0.4, roughness: 0.6 }));
-  plate.position.y = -2.05; bedGroup.add(plate);
-  const top = new THREE.Mesh(new THREE.CircleGeometry(bedR - 2.5, 128), new THREE.MeshStandardMaterial({ color: '#1d3a31', roughness: 0.85 }));
-  top.rotation.x = -Math.PI / 2; top.position.y = -0.04; bedGroup.add(top);
+  const plate = new THREE.Mesh(new THREE.CylinderGeometry(bedR, bedR, 4, 128), new THREE.MeshStandardMaterial({ color: '#262c33', metalness: 0.7, roughness: 0.4 }));
+  plate.position.y = -2.05; plate.receiveShadow = true; bedGroup.add(plate);
+  const top = new THREE.Mesh(new THREE.CircleGeometry(bedR - 2.5, 128), new THREE.MeshStandardMaterial({ color: '#1d3a31', roughness: 0.7, envMapIntensity: 0.6 }));
+  top.rotation.x = -Math.PI / 2; top.position.y = -0.04; top.receiveShadow = true; bedGroup.add(top);
   const ringMat = new THREE.LineBasicMaterial({ color: 0x2c5446, transparent: true, opacity: 0.6 });
   for (let r = 25; r < bedR - 5; r += 25) {
     const pts = []; for (let k = 0; k <= 128; k++) { const a = k / 128 * Math.PI * 2; pts.push(new THREE.Vector3(r * Math.cos(a), -0.02, r * Math.sin(a))); }
     bedGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ringMat));
   }
-  // small tick at the rim so you can see the bed turn
+  // degree marks at the rim every 15 degrees (longer every 90), so you can see the bed turn
+  const tk = [];
+  for (let d = 0; d < 360; d += 15) { const a = rad(d), r0 = bedR - 3 - (d % 90 ? 4 : 9); tk.push(r0 * Math.cos(a), -0.01, r0 * Math.sin(a), (bedR - 3) * Math.cos(a), -0.01, (bedR - 3) * Math.sin(a)); }
+  const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.Float32BufferAttribute(tk, 3));
+  bedGroup.add(new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x4f8a76, transparent: true, opacity: 0.8 })));
+  // small tick at the rim at C = 0
   const tick = new THREE.Mesh(new THREE.BoxGeometry(10, 0.6, 3), new THREE.MeshStandardMaterial({ color: '#f5b942', emissive: '#3a2a00' }));
   tick.position.set(bedR - 7, 0.05, 0); bedGroup.add(tick);
   const colX = Math.max(bedR, S.xMax) + 45, colH = S.zMax + L + 120;
@@ -1204,14 +1241,21 @@ function buildMachine() {
   nz.position.y = -L + 2 + (S.bodyStart - 2) / 2; headGroup.add(nz);
   const cone = new THREE.Mesh(new THREE.ConeGeometry(S.shaftR, 2, 16), matBrass); cone.rotation.x = Math.PI; cone.position.y = -L + 1; headGroup.add(cone);
   tipObj = new THREE.Object3D(); tipObj.position.y = -L; headGroup.add(tipObj);
+  for (const o of [column, zCar, arm]) o.castShadow = true;
+  headGroup.traverse(o => { if (o.isMesh) o.castShadow = true; });
   beadGeo = beadGeo || new THREE.CylinderGeometry(1, 1, 1, 6, 1, true);
   const pg = new THREE.BufferGeometry();
-  pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(401 * 3), 3));
-  pg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(401 * 3), 3));
-  previewLine = new THREE.Line(pg, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 }));
+  pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(PREVIEW_VERTS * 3), 3));
+  pg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(PREVIEW_VERTS * 3), 3));
+  previewLine = new THREE.LineSegments(pg, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 }));
   previewLine.frustumCulled = false; bedGroup.add(previewLine);
+  liveBead = new THREE.Mesh(beadGeo, matLive); liveBead.matrixAutoUpdate = false; liveBead.visible = false; liveBead.frustumCulled = false;
+  liveBead.castShadow = true; liveBead.receiveShadow = true; bedGroup.add(liveBead);
   if (beadMesh) bedGroup.add(beadMesh);
   if (markerMesh) bedGroup.add(markerMesh);
+  if (travelLines) bedGroup.add(travelLines);
+  if (retractPts) bedGroup.add(retractPts);
+  invalidate();
 }
 
 const PAL = {
@@ -1254,7 +1298,7 @@ function colorBeads() {
     beadMesh.setColorAt(s, col);
   }
   beadMesh.instanceColor.needsUpdate = true;
-  updateLegend();
+  updateLegend(); invalidate();
 }
 function updateLegend() {
   const el = $('#legend'); if (!el) return;
@@ -1265,33 +1309,80 @@ function updateLegend() {
   else if (view.color === 'height') html = `<div class="lg-t">Height</div>` + grad(PAL.height, ['0', `${fmt(beadYmax / 2, 0)}`, `${fmt(beadYmax, 0)} mm`]);
   else if (view.color === 'flow') html = `<div class="lg-t">Plastic per mm</div>` + grad(PAL.flow, [`${S.flowLow}×`, 'typical', `${S.flowHigh}×`]) + `<div class="lg-keys"><span><i style="background:#5b6673;height:10px;width:10px"></i>Prime / unretract (normal)</span></div>`;
   else if (view.color === 'support') html = `<div class="lg-t">Support check</div><div class="lg-keys">${[['Supported', 0], ['Stray', 3], ['Overhang', 2], ['Bridge', 1], ['Short span', 5]].map(([t, k]) => `<span><i style="background:${PAL.support[k]}"></i>${t}</span>`).join('')}</div>`;
+  if (view.travels) html += `<div class="lg-keys"><span><i style="background:#f5a524;opacity:.5"></i>Travel done</span><span><i class="dot" style="background:#ff5c5e"></i>Retract</span><span><i class="dot" style="background:#5ed499"></i>Prime</span></div>`;
   html += `<div class="lg-keys"><span><i style="background:#4fd1c5"></i>Next extrusion</span><span><i style="background:#f5a524"></i>Next travel</span><span><i class="dot" style="background:#ff5a5f"></i>Collision</span><span><i class="dot" style="background:#b98bff"></i>Floating</span><span><i class="dot" style="background:#f5b942"></i>Blob</span></div>`;
   el.innerHTML = html;
+}
+// Bead cross-section of every segment. 'flow': as thick as a layer, measured along the nozzle axis, and as wide as
+// the plastic the E value pushes fills (Cura's model: a rectangle with round sides, A = (w - h) h + pi h^2 / 4).
+// A bead on the bed is as thick as the gap under the tip. Primes and blobs keep the nominal size.
+function beadLayerHeights() {
+  const I = slicerInfo();
+  const lh = parseFloat(I.header['Layer height']) || parseFloat(I.cura.layer_height);
+  const nom = S.beadHeight > 0 ? S.beadHeight : (lh > 0 ? lh : S.layerH);
+  const l0 = parseFloat(I.cura.layer_height_0);
+  return { nom, first: l0 > 0 ? Math.max(l0, nom) : nom };
+}
+function beadDims() {
+  const n = P.beadTotal, bw = new Float32Array(n), bh = new Float32Array(n);
+  const { nom, first } = beadLayerHeights(), wMax = 4 * S.beadWidth;
+  for (let s = 0; s < n; s++) {
+    if (S.beadShape === 'round') { bw[s] = bh[s] = S.beadWidth; continue; }
+    const A = P.segArea[s], tipY = Math.min(P.seg[s * 6 + 1], P.seg[s * 6 + 4]);
+    let h = nom;
+    if (tipY < first * 1.15) h = Math.min(first, Math.max(0.4 * nom, tipY)); // on the bed: fills the gap under the tip
+    if (P.segPrime[s] || !(A > 0) || !isFinite(A)) { bw[s] = S.beadWidth; bh[s] = h; continue; }
+    if (A < Math.PI * h * h / 4) { bw[s] = bh[s] = 2 * Math.sqrt(A / Math.PI); continue; } // too little plastic to fill a layer: a thin round thread
+    bw[s] = Math.min(wMax, A / h + h * (1 - Math.PI / 4)); bh[s] = h;
+  }
+  P.beadW = bw; P.beadH = bh;
+}
+// Instance matrix of bead segment s, or of its first fraction g (the bead being laid). The unit hexagonal tube
+// (beadGeo) has its flat faces at x = +-cos 30 deg: x goes along the nozzle axis (thickness), y along the path,
+// z across the path (width). In 'flow' shape the top face carries the tip path and the bead hangs below the tip.
+const HEX_FLAT = Math.cos(Math.PI / 6);
+function beadMatrix(s, g, m) {
+  const o = s * 6, seg = P.seg, e = m.elements;
+  const dx = (seg[o + 3] - seg[o]) * g, dy = (seg[o + 4] - seg[o + 1]) * g, dz = (seg[o + 5] - seg[o + 2]) * g;
+  const len = Math.hypot(dx, dy, dz);
+  if (len < 1e-6) { m.makeScale(0, 0, 0); return m; }
+  const ux = dx / len, uy = dy / len, uz = dz / len;
+  // thickness axis: the nozzle axis (pivot to tip, into the layer below) made square to the path
+  let nx = P.segN[s * 3], ny = P.segN[s * 3 + 1], nz = P.segN[s * 3 + 2];
+  let dot = nx * ux + ny * uy + nz * uz, hx = nx - dot * ux, hy = ny - dot * uy, hz = nz - dot * uz, hl = Math.hypot(hx, hy, hz);
+  if (hl < 0.2) { // path runs along the nozzle: any square direction will do
+    if (Math.abs(uy) < 0.9) { nx = 0; ny = -1; nz = 0; } else { nx = 1; ny = 0; nz = 0; }
+    dot = nx * ux + ny * uy + nz * uz; hx = nx - dot * ux; hy = ny - dot * uy; hz = nz - dot * uz; hl = Math.hypot(hx, hy, hz);
+  }
+  hx /= hl; hy /= hl; hz /= hl;
+  const wx = hy * uz - hz * uy, wy = hz * ux - hx * uz, wz = hx * uy - hy * ux; // h x u: keeps the basis right-handed
+  const round = S.beadShape === 'round';
+  const bw = P.beadW[s], bh = P.beadH[s];
+  const th = round ? bw / 2 : bh / 2 / HEX_FLAT, tw = bw / 2, tl = len + 0.3 * Math.min(bw, 1.5);
+  const sink = round ? 0 : bh / 2; // centre half a bead below the tip path
+  const cx = seg[o] + dx / 2 + hx * sink, cy = seg[o + 1] + dy / 2 + hy * sink, cz = seg[o + 2] + dz / 2 + hz * sink;
+  e[0] = hx * th; e[1] = hy * th; e[2] = hz * th; e[3] = 0;
+  e[4] = ux * tl; e[5] = uy * tl; e[6] = uz * tl; e[7] = 0;
+  e[8] = wx * tw; e[9] = wy * tw; e[10] = wz * tw; e[11] = 0;
+  e[12] = cx; e[13] = cy; e[14] = cz; e[15] = 1;
+  return m;
 }
 function buildBeadMesh() {
   if (beadMesh) { bedGroup.remove(beadMesh); if (beadMesh.dispose) beadMesh.dispose(); beadMesh = null; }
   const n = P.beadTotal;
   if (!n) return;
+  beadDims();
   beadMesh = new THREE.InstancedMesh(beadGeo, matBead, n);
   beadMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3);
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
-  const a = new THREE.Vector3(), b = new THREE.Vector3(), d = new THREE.Vector3(), sc = new THREE.Vector3();
-  const r = S.beadWidth / 2;
-  for (let s = 0; s < n; s++) {
-    const o = s * 6;
-    a.set(P.seg[o], P.seg[o + 1], P.seg[o + 2]); b.set(P.seg[o + 3], P.seg[o + 4], P.seg[o + 5]);
-    d.subVectors(b, a); const len = d.length();
-    if (len < 1e-6) { m.makeScale(0, 0, 0); beadMesh.setMatrixAt(s, m); continue; }
-    d.divideScalar(len); q.setFromUnitVectors(up, d);
-    sc.set(r, len + r * 0.6, r);
-    m.compose(a.add(b).multiplyScalar(0.5), q, sc);
-    beadMesh.setMatrixAt(s, m);
-  }
+  const m = new THREE.Matrix4();
+  for (let s = 0; s < n; s++) beadMesh.setMatrixAt(s, beadMatrix(s, 1, m));
   beadMesh.frustumCulled = false; beadMesh.count = 0;
+  beadMesh.receiveShadow = true; beadMesh.castShadow = n <= SHADOW_CAST_MAX;
   colorBeads();
   bedGroup.add(beadMesh);
 }
 function buildMarkers() {
+  invalidate();
   if (markerMesh) { bedGroup.remove(markerMesh); if (markerMesh.dispose) markerMesh.dispose(); markerMesh = null; }
   const pri = { stray: 0, blob: 1, part: 2, bed: 3, float: 4 };
   const pts = issues.filter(x => x.pos && x.kind in pri).sort((a, b) => pri[a.kind] - pri[b.kind]).slice(0, 1500);
@@ -1300,7 +1391,7 @@ function buildMarkers() {
   markerMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(pts.length * 3), 3);
   const m = new THREE.Matrix4(), cRed = new THREE.Color('#ff5a5f'), cFloat = new THREE.Color('#c38bff'), cBlob = new THREE.Color('#f0b429');
   pts.forEach((x, k) => { m.makeTranslation(x.pos[0], x.pos[1], x.pos[2]); markerMesh.setMatrixAt(k, m); markerMesh.setColorAt(k, x.kind === 'float' || x.kind === 'stray' ? cFloat : x.kind === 'blob' ? cBlob : cRed); });
-  markerMesh.frustumCulled = false; bedGroup.add(markerMesh);
+  markerMesh.frustumCulled = false; bedGroup.add(markerMesh); invalidate();
 }
 
 // ---------- camera ----------
@@ -1333,7 +1424,7 @@ function placeCamera() {
 })();
 function resize() {
   const w = vp.clientWidth, h = vp.clientHeight;
-  renderer.setSize(w, h); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix();
+  renderer.setSize(w, h); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix(); invalidate();
 }
 new ResizeObserver(resize).observe(vp);
 
@@ -1354,24 +1445,100 @@ function pose(X, Z, B, C) {
   zCar.position.set(colX + 3, py, 0);
 }
 
-// ---------- preview of upcoming path ----------
+// ---------- preview of upcoming path, travel moves and retractions ----------
+// The firmware moves C, X, Z and B together in straight lines in joint space, so between two G-code points the tip
+// follows a curve (a spiral when C turns). Lines are split like the beads (C every beadArcDeg, B every 6 deg) so they
+// show that real path, not the chord.
+function moveSplits(a, b0, b1) {
+  return Math.min(32, Math.max(1, Math.ceil(Math.abs(a[b1 + 3] - a[b0 + 3]) / S.beadArcDeg), Math.ceil(Math.abs(a[b1 + 2] - a[b0 + 2]) / 6)));
+}
+function tipAlong(a, b0, b1, f, out) { // bed-frame tip position at fraction f of a move (joint-space blend)
+  const X = a[b0] + (a[b1] - a[b0]) * f, Z = a[b0 + 1] + (a[b1 + 1] - a[b0 + 1]) * f;
+  const B = a[b0 + 2] + (a[b1 + 2] - a[b0 + 2]) * f, C = a[b0 + 3] + (a[b1 + 3] - a[b0 + 3]) * f;
+  tipMachine(S, X, Z, B, tmT); return machineToBed(S, tmT[0], tmT[1], 0, C, out);
+}
 let lastPreviewI = -1;
 function updatePreview(i) {
   if (!P || !view.preview) { previewLine.visible = false; return; }
   previewLine.visible = true;
   if (i === lastPreviewI) return; lastPreviewI = i;
   const pos = previewLine.geometry.attributes.position, colr = previewLine.geometry.attributes.color;
-  let k = 0;
-  for (let j = i; j <= Math.min(P.n, i + 400); j++, k++) {
-    const b = j * 5;
-    tipMachine(S, P.act[b], P.act[b + 1], P.act[b + 2], tmT); machineToBed(S, tmT[0], tmT[1], 0, P.act[b + 3], tb);
-    pos.setXYZ(k, tb[0], tb[1] + 0.3, tb[2]);
-    const ext = j < P.n && P.type[j] === 1 && P.act[b + 9] > P.act[b + 4];
-    const fade = 1 - (j - i) / 420;
-    if (ext) colr.setXYZ(k, 0.31 * fade, 0.82 * fade, 0.77 * fade); else colr.setXYZ(k, 0.96 * fade, 0.65 * fade, 0.14 * fade);
+  const a = P.act, p0 = [0, 0, 0], p1 = [0, 0, 0];
+  let v = 0;
+  for (let j = i; j < Math.min(P.n, i + PREVIEW_MOVES); j++) {
+    const t = P.type[j];
+    if (t === 3 || t === 4) continue;
+    const b0 = j * 5, b1 = b0 + 5;
+    const ext = t === 1 && a[b1 + 4] > a[b0 + 4];
+    const fade = 1 - (j - i) / (PREVIEW_MOVES * 1.05);
+    const cr = ext ? 0.31 : 0.96, cg = ext ? 0.82 : 0.65, cb = ext ? 0.77 : 0.14;
+    const k = Math.min(16, moveSplits(a, b0, b1));
+    tipAlong(a, b0, b1, 0, p0);
+    for (let q = 1; q <= k && v + 2 <= PREVIEW_VERTS; q++) {
+      tipAlong(a, b0, b1, q / k, p1);
+      pos.setXYZ(v, p0[0], p0[1] + 0.3, p0[2]); colr.setXYZ(v++, cr * fade, cg * fade, cb * fade);
+      pos.setXYZ(v, p1[0], p1[1] + 0.3, p1[2]); colr.setXYZ(v++, cr * fade, cg * fade, cb * fade);
+      p0[0] = p1[0]; p0[1] = p1[1]; p0[2] = p1[2];
+    }
   }
-  previewLine.geometry.setDrawRange(0, k);
+  previewLine.geometry.setDrawRange(0, v);
   pos.needsUpdate = true; colr.needsUpdate = true;
+}
+// Every move that does not lay plastic (G0, and G1 without E), along its real path, plus a dot where the filament
+// is pulled back (retract) or pushed in without the tip moving (prime / unretract). Shown up to the current move.
+const TRAVEL_MAX_VERTS = 6000000;
+function buildTravelLayer() {
+  for (const o of [travelLines, retractPts]) if (o) { bedGroup.remove(o); o.geometry.dispose(); }
+  travelLines = retractPts = null;
+  const n = P.n, a = P.act, tStart = new Int32Array(n + 1), rStart = new Int32Array(n + 1);
+  let nv = 0, nr = 0;
+  for (let i = 0; i < n; i++) { // count first
+    const t = P.type[i], b0 = i * 5, b1 = b0 + 5;
+    let moved = false; for (let k = 0; k < 4; k++) if (a[b1 + k] !== a[b0 + k]) moved = true;
+    const bead = P.beadStart[i + 1] > P.beadStart[i];
+    if ((t === 0 || t === 1 || t === 2) && moved && !bead && nv < TRAVEL_MAX_VERTS) nv += 2 * moveSplits(a, b0, b1);
+    const dE = a[b1 + 4] - a[b0 + 4];
+    if ((t === 0 || t === 1) && (dE < -1e-6 || (dE > 1e-6 && !bead))) nr++;
+    tStart[i + 1] = nv; rStart[i + 1] = nr;
+  }
+  const pos = new Float32Array(nv * 3), rp = new Float32Array(nr * 3), rc = new Float32Array(nr * 3);
+  const p0 = [0, 0, 0], p1 = [0, 0, 0];
+  let v = 0, r = 0;
+  for (let i = 0; i < n; i++) {
+    const b0 = i * 5, b1 = b0 + 5;
+    if (tStart[i + 1] > tStart[i]) {
+      const k = (tStart[i + 1] - tStart[i]) / 2;
+      tipAlong(a, b0, b1, 0, p0);
+      for (let q = 1; q <= k; q++) {
+        tipAlong(a, b0, b1, q / k, p1);
+        pos.set(p0, v); pos.set(p1, v + 3); v += 6;
+        p0[0] = p1[0]; p0[1] = p1[1]; p0[2] = p1[2];
+      }
+    }
+    if (rStart[i + 1] > rStart[i]) {
+      tipAlong(a, b0, b1, 1, p1);
+      rp[r] = p1[0]; rp[r + 1] = p1[1] + 0.15; rp[r + 2] = p1[2];
+      const back = a[b1 + 4] < a[b0 + 4]; // retract: red; prime: green
+      rc[r] = back ? 1 : 0.37; rc[r + 1] = back ? 0.36 : 0.83; rc[r + 2] = back ? 0.37 : 0.6;
+      r += 3;
+    }
+  }
+  const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  travelLines = new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0xf5a524, transparent: true, opacity: 0.35, depthWrite: false }));
+  const rg = new THREE.BufferGeometry(); rg.setAttribute('position', new THREE.BufferAttribute(rp, 3)); rg.setAttribute('color', new THREE.BufferAttribute(rc, 3));
+  retractPts = new THREE.Points(rg, new THREE.PointsMaterial({ size: 5, sizeAttenuation: false, vertexColors: true }));
+  for (const o of [travelLines, retractPts]) { o.frustumCulled = false; o.visible = false; bedGroup.add(o); }
+  P.travelStart = tStart; P.retractStart = rStart;
+  P.travelCapped = nv >= TRAVEL_MAX_VERTS;
+}
+function updateTravelLayer(i) {
+  if (!travelLines) return;
+  const on = !!(P && view.travels);
+  travelLines.visible = retractPts.visible = on;
+  if (!on) return;
+  const k = Math.min(i, P.n);
+  travelLines.geometry.setDrawRange(0, P.travelStart[k]);
+  retractPts.geometry.setDrawRange(0, P.retractStart[k]);
 }
 
 // ---------- readouts ----------
@@ -1417,7 +1584,7 @@ function readouts(now, s, c, i) {
 }
 
 // ---------- main loop ----------
-let last = performance.now();
+let last = performance.now(), lastKey = '';
 function tick(now) {
   const dt = Math.min(0.5, (now - last) / 1000); last = now; // cap: avoid a jump after a stall, but keep 1× real time on heavy files
   if (P && playing && !manual.active) { T += dt * speedMul; if (T >= P.total) { T = P.total; setPlaying(false); } }
@@ -1431,19 +1598,32 @@ function tick(now) {
   } else if (P) { stateAt(P, T, ST); s = ST.s; c = ST.c; i = ST.i; }
   else { s = [S.homeX, S.homeZ, S.homeB, 0, 0]; c = s; }
   pose(s[0], s[1], s[2], s[3]);
+  liveBead.visible = false;
   if (P && beadMesh) {
     if (!view.beads) beadMesh.visible = false;
     else {
       beadMesh.visible = true;
       let cnt = P.beadStart[Math.min(i, P.n)];
-      if (i < P.n) cnt += Math.floor((P.beadStart[i + 1] - P.beadStart[i]) * ST.frac);
+      if (i < P.n) {
+        // whole bead segments behind the tip, plus the one being laid, drawn up to the tip
+        const k = P.beadStart[i + 1] - P.beadStart[i], jf = k * ST.frac, j = Math.floor(jf), g = jf - j;
+        cnt += j;
+        if (k && j < k && g > 1e-3) {
+          const sl = P.beadStart[i] + j, ca = beadMesh.instanceColor.array;
+          beadMatrix(sl, g, liveBead.matrix); liveBead.matrixWorldNeedsUpdate = true;
+          matLive.color.setRGB(ca[sl * 3], ca[sl * 3 + 1], ca[sl * 3 + 2]);
+          liveBead.visible = true;
+        }
+      }
       beadMesh.count = cnt;
     }
   }
-  if (P) updatePreview(Math.min(i, P.n)); else if (previewLine) previewLine.visible = false;
+  if (P) { updatePreview(Math.min(i, P.n)); updateTravelLayer(i); } else if (previewLine) previewLine.visible = false;
   if (view.follow) { tipObj.getWorldPosition(tmp3); orbit.target.lerp(tmp3, 0.15); }
   placeCamera();
-  renderer.render(scene, camera);
+  // draw only when something on screen changed: an idle view of a big print costs no GPU time
+  const o = orbit, key = [T, s[0], s[1], s[2], s[3], o.r, o.th, o.ph, o.target.x, o.target.y, o.target.z, view.bedFrame, view.beads, view.preview, view.travels, view.color, P ? P.n : 0].join();
+  if (sceneDirty || key !== lastKey) { renderer.render(scene, camera); lastKey = key; sceneDirty = false; }
   readouts(now, s, c, i);
   requestAnimationFrame(tick);
 }
@@ -1468,7 +1648,7 @@ async function rebuild(keepT) {
   buildBeadSegments(S, Q);
   P = Q;
   issues = []; lastSupport = null; issueFilter = null; $('#inspect').hidden = true; renderIssues(null); renderConventions(null); buildMarkers(); fileStats(); renderSlicer();
-  buildMachine(); buildBeadMesh();
+  buildMachine(); buildBeadMesh(); buildTravelLayer();
   lastPreviewI = -1;
   T = keepT ? frac * P.total : 0;
   busy(false); showEmpty(false);
@@ -1533,6 +1713,7 @@ $('#bedframe').addEventListener('change', e => view.bedFrame = e.target.checked)
 $('#follow').addEventListener('change', e => view.follow = e.target.checked);
 $('#showbeads').addEventListener('change', e => view.beads = e.target.checked);
 $('#showpreview').addEventListener('change', e => { view.preview = e.target.checked; lastPreviewI = -1; });
+$('#showtravel').addEventListener('change', e => { view.travels = e.target.checked; updateLegend(); if (view.travels && P && P.travelCapped) toast('This file has too many travel moves to show them all. The latest ones are missing.'); });
 $('#colormode').addEventListener('change', e => { view.color = e.target.value; if (view.color === 'support' && !lastSupport && P) toast('Run the preflight check to color by support. Until then everything shows as supported.'); colorBeads(); updateLegend(); });
 
 // ---------- jog ----------
