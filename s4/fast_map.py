@@ -240,7 +240,7 @@ SMOOTH_STATS = {}  # diagnostics of the last smooth_mapping call
 
 
 def smooth_mapping(P, mapped, ok, g, retraction, sigma, max_shift, window=12, chunk=100000):
-    """MAP_SMOOTH: a smoother map for the printed paths (opt-in; fast path only).
+    """MAP_SMOOTH: a smoother map for the printed paths (opt-in; s4/reference.py calls this same function).
 
     The deformation is linear per tet, so a straight planar line maps to a polyline that kinks wherever it crosses a
     tet face. Here the displacement D = P - mapped is re-estimated at every printed point by a local linear fit
@@ -531,3 +531,4 @@ def write_gcode(pts, out_path, NOZZLE_OFFSET=42):
             lines.append("G93\n")
     with open(out_path, "w") as fh:
         fh.write("".join(lines))
+    return idx  # the output moves written, one G00/G01 line each, in order

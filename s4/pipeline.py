@@ -118,8 +118,6 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
             retraction = mp["RETRACTION_LENGTH"]
             if impl == "reference":
                 from . import reference as ref
-                if mp.get("MAP_SMOOTH") or mp.get("MAX_C_STEP"):
-                    log("[map] MAP_SMOOTH / MAX_C_STEP are only implemented in --impl fast; ignored here")
                 pts, stats = ref.map_gcode(input_tet, deformed, planar_path, mp)
                 with TIMER("write G-code"):
                     ref.write_gcode(pts, out_gcode, NOZZLE_OFFSET=mp["NOZZLE_OFFSET"])
@@ -130,7 +128,9 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
                 pts, stats = fast_map.map_gcode(in_cells, in_points, in_centers, d_points, d_centers,
                                                 meshio_s4.make_find_cells(deformed), planar_path, mp)
                 with TIMER("write G-code"):
-                    fast_map.write_gcode(pts, out_gcode, NOZZLE_OFFSET=mp["NOZZLE_OFFSET"])
+                    written = fast_map.write_gcode(pts, out_gcode, NOZZLE_OFFSET=mp["NOZZLE_OFFSET"])
+                # diagnostics: the planar point each written G00/G01 line came from (tools/model_suite waviness)
+                np.save(os.path.join(work_dir, "map_src.npy"), np.asarray(pts["src"], dtype=np.int64)[written])
             if mp.get("LIMIT_AXIS_SPEEDS"):
                 from . import feed_limits
                 with TIMER("axis speed limits"):

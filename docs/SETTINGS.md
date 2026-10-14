@@ -102,8 +102,8 @@ Each is on by default and off with `--notebook-exact` (see [Differences](#differ
 | `SPLIT_RETRACTIONS` | true | retract/unretract in place |
 | `SAFE_TRAVEL_TRANSITIONS` | true | lower the nozzle after a travel that left the part, before printing |
 
-### Smoother paths (opt-in, `--impl fast` only)
-Off by default; `--impl reference` ignores them. Measurements are in the [CHANGELOG](../CHANGELOG.md).
+### Smoother paths (opt-in)
+Off by default. Both implementations have them (fast and reference stay byte-identical). Measurements are in the [CHANGELOG](../CHANGELOG.md).
 
 | setting | default | what it does |
 |---|---|---|

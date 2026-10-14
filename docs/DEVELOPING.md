@@ -34,12 +34,18 @@ venv\Scripts\python tools\check_equivalence.py "input_models/pi 3mm.stl" --param
 ```
 It runs the reference implementation and the fast one on the same model and the same planar G-code, compares the
 deformed mesh and the final G-code, and exits non-zero on failure. The two must be byte-identical (apart from the
-`planar_gcode` line of the settings block). Add `--notebook-exact` to check the notebook's original behaviour.
+`planar_gcode` line of the settings block). Add `--notebook-exact` to check the notebook's original behaviour, and
+`--set KEY=VALUE` (repeatable, passed to both runs) to check an opt-in setting, e.g.
+`--set MAP_SMOOTH=0.5 --set MAX_C_STEP=3`. `--extra ...` (last) goes to the candidate run only.
 
 ### The six-model suite
 `tools/model_suite.py` slices all six test models (in parallel) and reports structure (ungrounded, island,
 cantilever: walls/skin and total), poles, extrusion along the nozzle axis, tilt, roughness (the sim's path-roughness
-count, `s4/quality.py`) and print time. With `--baseline DIR` (an earlier `--out`) it flags regressions.
+count, `s4/quality.py`), the shape metrics of `tools/shape_metrics.py` (`outside_mm`, `surface_rough_pct`,
+`asym_mm`), `waviness` (joints turning > 10 deg where Cura's planar path runs straight: what the mapping adds,
+`tools/roughness_breakdown.py`) and print time. With `--baseline DIR` (an earlier `--out`) it flags regressions.
+`--sliced-from DIR` reuses an earlier run's planar G-code, for comparing map-only settings without CuraEngine's
+noise. `tools/roughness_breakdown.py RUN_DIR MODEL` sorts a run's rough segments by cause.
 ```
 venv\Scripts\python tools\model_suite.py --out build/suite/base
 venv\Scripts\python tools\model_suite.py --out build/suite/try --set KEY=VALUE --baseline build/suite/base

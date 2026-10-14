@@ -33,7 +33,10 @@ def measure(model, stl_path, mid, seg_len, rough_deg):
     m = _model(stl_path)
     scene = o3d.t.geometry.RaycastingScene()
     scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(m))
-    sd = scene.compute_signed_distance(o3d.core.Tensor(mid.astype(np.float32))).numpy()
+    q = o3d.core.Tensor(mid.astype(np.float32))
+    # the sign by a 5-ray inside/outside vote: compute_signed_distance casts one ray, and on a mesh that isn't
+    # watertight (Squirtle's STL is open and self-intersecting) it flips the sign of a few points deep inside
+    sd = scene.compute_distance(q).numpy() * np.where(scene.compute_occupancy(q, nsamples=5).numpy() > 0.5, -1.0, 1.0)
     out = {"outside_mm": round(float(seg_len[sd > 1.0].sum()), 1)}
     near = np.abs(sd) < 0.7
     out["surface_rough_pct"] = round(100.0 * float((rough_deg[near] > 30).mean()), 2) if near.any() else None

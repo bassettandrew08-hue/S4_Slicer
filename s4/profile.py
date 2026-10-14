@@ -51,12 +51,12 @@ MAP_DEFAULTS = dict(
     # used the previous move's, giving extruding G00 lines and non-extruding G01 lines); (c) points mapped just below
     # the bed are clamped to it instead of dropped
     SAFE_TRAVEL_TRANSITIONS=True,
-    # > 0: smoother mapping of the printed paths (mm, the blending radius; s4/fast_map.py smooth_mapping, fast path
-    # only). The per-tet linear map bends straight lines at tet faces; this blends the map over about this distance.
+    # > 0: smoother mapping of the printed paths (mm, the blending radius; s4/fast_map.py smooth_mapping).
+    # The per-tet linear map bends straight lines at tet faces; this blends the map over about this distance.
     # 0 = off (the notebook's per-tet barycentric map). MAP_SMOOTH_MAX caps how far a point may move (mm)
     MAP_SMOOTH=0,
     MAP_SMOOTH_MAX=0.2,
-    # > 0: split print moves so none sweeps more than this many degrees of C (fast path only). The machine moves C
+    # > 0: split print moves so none sweeps more than this many degrees of C. The machine moves C
     # and X linearly, so near the turntable axis a long C sweep is drawn as a curve. 0 = off
     MAX_C_STEP=0,
     # slow down any move that would drive an axis past these speeds (the notebook timed moves by the planar G-code

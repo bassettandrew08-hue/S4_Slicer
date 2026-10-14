@@ -13,6 +13,7 @@ import concurrent.futures as cf
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -32,12 +33,12 @@ REGIONS = {"pi 3mm": {"bridge_underside": ((-5, 5), (-5.5, 5.5), (9.5, 12.5))}}
 # along_axis and zigzag are computed in measure()
 METRICS = ("ungrounded_mm", "ungrounded_wall_mm", "island_wall_mm", "cantilever_wall_mm", "island_mm",
            "cantilever_mm", "bridge_mm", "poles", "along_axis", "tilt_deg", "zigzag", "estimated_print_time_min",
-           "outside_mm", "surface_rough_pct", "asym_mm")  # the last three: tools/shape_metrics.py
+           "outside_mm", "surface_rough_pct", "asym_mm", "waviness")  # outside..asym: tools/shape_metrics.py
 
 # metric: (worse when, tolerance before it counts as a regression)
 # structure is judged on walls/skin; sparse infill floats a little even in a flat print (it is still reported)
 CHECKS = {"ungrounded_mm": ("up_rel", 0.5), "ungrounded_wall_mm": ("up", 1.0), "island_wall_mm": ("up", 0.5),
-          "cantilever_wall_mm": ("up", 2.0), "poles": ("up", 0), "along_axis": ("up", 0), "zigzag": ("up_rel", 0.10),
+          "cantilever_wall_mm": ("up", 2.0), "poles": ("up", 0), "along_axis": ("up", 0), "zigzag": ("up_rel", 0.10), "waviness": ("up_rel", 0.10),
           "tilt_deg": ("down", 2.0)}
 
 
@@ -46,7 +47,10 @@ def run_model(model, out, extra, python, sliced_from=None):
     args = [python, os.path.join(HERE, "s4_slice.py"), os.path.join(HERE, "input_models", f"{model}.stl"),
             "-o", gc, "--work-dir", os.path.join(out, model)] + extra
     if sliced_from:  # map-only changes: reuse that run's planar G-code (CuraEngine isn't deterministic)
-        args += ["--sliced-gcode", os.path.join(sliced_from, model, f"{model}_deformed_tet.gcode")]
+        os.makedirs(os.path.join(out, model), exist_ok=True)
+        planar = os.path.join(out, model, f"{model}_deformed_tet.gcode")  # a copy, so measure() finds it here
+        shutil.copyfile(os.path.join(sliced_from, model, f"{model}_deformed_tet.gcode"), planar)
+        args += ["--sliced-gcode", planar]
     t = time.time()
     p = subprocess.run(args, cwd=HERE, capture_output=True, text=True, errors="replace")
     log = p.stdout + p.stderr
@@ -80,6 +84,17 @@ def measure(model, gc, log=None, seconds=None):
                                      np.linalg.norm(p1 - p0, axis=1), r["rough"]))
     res.update(target_tilt_deg=num("deform.target_tilt_deg"), segments=r["segments"],
                seconds=round(seconds, 1) if seconds else None)
+    # waviness: joints turning > 10 deg where the planar path runs straight (tools/roughness_breakdown.py); needs the
+    # run's map_src.npy (written by --impl fast) and its planar G-code
+    work = gc[:-len(".gcode")]
+    src = os.path.join(work, "map_src.npy")
+    planar = hdr.get("planar_gcode", f"{model}_deformed_tet.gcode")
+    planar = planar if os.path.isabs(planar) else os.path.join(work, planar)
+    res["waviness"] = None
+    if os.path.exists(src) and os.path.exists(planar):
+        from tools.roughness_breakdown import waviness
+        res["waviness"] = waviness(gc, planar, np.load(src), num("SEG_SIZE", 0.6), num("RETRACTION_LENGTH", 1.0),
+                                   num("NOZZLE_OFFSET", 42.0))[0]
     for name, box in REGIONS.get(model, {}).items():
         mid = r["mid"]
         inside = (r["rough"] > 30)

@@ -51,19 +51,43 @@ Every rough bead segment (the suite's `zigzag`) traced back to the planar point 
   pi 213 -> 267 (bridge underside 31 -> 41) and z mount ungrounded walls 0.3 -> 2.7 mm. Not adopted; it is a
   `--cura-set` away for the models it helps. 0.005 and 0.05 are both worse than 0.01.
 
-### Added (opt-in, `--impl fast` only, off by default: no output change)
+### Added (opt-in, off by default: no output change)
 - **`MAP_SMOOTH`** (mm) and **`MAP_SMOOTH_MAX`**: the displacement at every printed point is re-fitted by a local
   linear fit over its neighbours on the same printed run (`s4/fast_map.py smooth_mapping`). Affine maps, corners
   and curves are reproduced exactly; only the bends at tet faces are blended. Points move 0.005-0.02 mm on average.
 - **`MAX_C_STEP`** (deg): print moves are split so none sweeps more than this much C.
-- **`tools/roughness_breakdown.py`**: the breakdown above, plus the "wobble" (turns of the final path where the
-  planar path is straight). **`tools/model_suite.py --sliced-from DIR`** reuses an earlier run's planar G-code, for
-  clean comparisons of map-only settings.
+- Both are in `s4/reference.py` too (it calls the same smoothing function), so fast and reference stay
+  byte-identical with them on: `tools/check_equivalence.py "input_models/pi 3mm.stl" --set MAP_SMOOTH=0.5
+  --set MAX_C_STEP=3` passes. `check_equivalence.py --set KEY=VALUE` is new and goes to both runs.
+- **`tools/roughness_breakdown.py`**: the breakdown above. **Suite metric `waviness`**: joints of the final path
+  turning > 10 deg where Cura's planar path runs straight (what the mapping adds; uses the new `map_src.npy` in the
+  work dir, written by `--impl fast`). **`tools/model_suite.py --sliced-from DIR`** reuses an earlier run's planar
+  G-code, for clean comparisons of map-only settings.
 
-Six models on the same planar G-code (`--sliced-from`), zigzag / surface_rough_pct:
+### Fixed
+- **`outside_mm` false positives** (`tools/shape_metrics.py`): the sign came from open3d's single-ray test, which
+  flips on meshes that aren't watertight (Squirtle's STL is open and self-intersecting). A segment 1.5 mm *inside*
+  Squirtle, 0.001 mm from a segment of the default run, counted as 1.5 mm outside. The sign is now a 5-ray vote;
+  `surface_rough_pct` (unsigned) is unchanged.
 
-| model | default | `MAP_SMOOTH` 0.5, `MAX_C_STEP` 3 | `MAP_SMOOTH` 1.0 (max 0.5), `MAX_C_STEP` 3 |
-|---|---|---|---|
+### Results: six models, re-sliced (no `--sliced-from`), default vs `MAP_SMOOTH` 0.5 + `MAX_C_STEP` 3
+
+| model | zigzag | surface_rough_pct | waviness | minutes |
+|---|---|---|---|---|
+| pi (bridge underside) | 213 (31) -> 195 (22) | 0.17 -> 0.16 | 1986 -> 191 | 40.6 -> 41.2 |
+| benchy | 5228 -> 4628 | 1.22 -> 1.06 | 6539 -> 672 | 149.9 -> 151.4 |
+| Squirtle | 2134 -> 2030 | 0.84 -> 0.80 | 1756 -> 111 | 82.1 -> 82.8 |
+| dino | 3161 -> 3164 | 1.24 -> 1.24 | 3310 -> 78 | 98.2 -> 99.0 |
+| z mount | 1389 -> 1292 | 0.42 -> 0.39 | 2516 -> 137 | 93.5 -> 94.4 |
+| B axis mount | 3544 -> 3554 | 1.27 -> 1.25 | 3257 -> 231 | 117.4 -> 118.1 |
+
+Support numbers (ungrounded, island, cantilever, bridge), poles, along-axis, tilt and `outside_mm` (0) are
+identical on all six. Waviness drops 90-98%. On z mount alone (same planar G-code), joints turning > 5 / > 10 deg:
+9837 / 2514 by default, 6178 / 1450 with `MAP_SMOOTH` 1.0 alone, 5771 / 1149 with `MAX_C_STEP` 3 alone, 527 / 40
+with both. `MAP_SMOOTH` 1.0 instead of 0.5 is a little worse on B axis mount (zigzag 3616, surface 1.28).
+A default candidate; not switched on here.
+
+---|---|---|---|
 | pi (bridge underside) | 213 (31) / 0.17 | 195 (22) / 0.16 | 200 (22) / 0.16 |
 | benchy | 5228 / 1.22 | 4628 / 1.06 | 4680 / 1.08 |
 | Squirtle | 2134 / 0.84 | 2030 / 0.80 | 2040 / 0.80 |

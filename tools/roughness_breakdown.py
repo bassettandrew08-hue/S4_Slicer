@@ -88,6 +88,57 @@ def planar_rough_points(path, seg=0.6, ret=1.0):
     return mid[np.minimum(raw, nb) > 30]
 
 
+def waviness(gcode_path, planar_path, src, seg=0.6, ret=1.0, nozzle_offset=42.0, threshold=10.0):
+    """Joints of the final path that turn more than `threshold` deg where the planar path runs straight on (planar
+    turn < 2 deg): what the mapping adds as wavy walls. src: the planar point of every G00/G01 line the mapper wrote
+    (the run's map_src.npy). Returns (count, straight joints)."""
+    W = re.compile(r"([CXZBE])(-?\d+(?:\.\d*)?|-?\.\d+)")
+    C = X = Z = B = 0.0
+    rows, owner = [], []
+    m = -1
+    with open(gcode_path, errors="replace") as fh:
+        for line in fh:
+            if not line.startswith(("G0", "G1")):
+                continue
+            mapper = line.startswith(("G00 ", "G01 "))
+            m += mapper
+            w = dict(W.findall(line.split(";", 1)[0]))
+            c, x, z, b = (float(w.get(k, v)) for k, v in (("C", C), ("X", X), ("Z", Z), ("B", B)))
+            if mapper and line.startswith("G01") and float(w.get("E", 0)) > 1e-6 and (c, x, z, b) != (C, X, Z, B):
+                rows.append((C, X, Z, B, c, x, z, b))
+                owner.append(m)
+            C, X, Z, B = c, x, z, b
+    if m + 1 != len(src):
+        raise ValueError(f"map_src has {len(src)} moves, the G-code {m + 1}")
+    a = np.array(rows)
+    A0, A1 = a[:, :4], a[:, 4:]
+    k = np.clip(np.maximum(np.ceil(np.abs(A1[:, 0] - A0[:, 0]) / 3), np.ceil(np.abs(A1[:, 3] - A0[:, 3]) / 6)), 1, 32)
+    k = k.astype(int)
+    sm = np.repeat(np.arange(len(a)), k)
+    jj = np.arange(k.sum()) - np.repeat(np.cumsum(k) - k, k)
+
+    def tip(f):
+        s = A0[sm] + (A1[sm] - A0[sm]) * f[:, None]
+        return np.c_[nozzle_tip(s[:, 0], s[:, 1], s[:, 2], s[:, 3], nozzle_offset)]
+    p0, p1 = tip(jj / k[sm]), tip((jj + 1) / k[sm])
+    dd = p1 - p0
+    Ls = np.linalg.norm(dd, axis=1)
+    raw = np.zeros(len(p0))
+    cont = (np.linalg.norm(p0[1:] - p1[:-1], axis=1) <= 0.05) & (Ls[1:] > 1e-6) & (Ls[:-1] > 1e-6)
+    raw[1:] = np.where(cont, turn(dd[:-1], dd[1:]), 0.0)
+    g = fast_map.read_gcode_points(planar_path, seg)
+    P = g["position"]
+    ext = np.array([e if e is not None else 0.0 for e in g["extrusion"]])
+    prn = np.array([c == "G01" for c in g["command"]]) & (ext > 0) & ~np.isclose(ext, ret)
+    d = np.diff(P, axis=0, prepend=P[:1])
+    praw = np.zeros(len(P))
+    praw[1:] = np.where(prn[1:] & prn[:-1], turn(d[:-1], d[1:]), 0.0)
+    fq = np.nonzero(jj == 0)[0]
+    si = np.asarray(src)[np.asarray(owner)[sm[fq]]]
+    straight = (praw[si] < 2.0) & prn[si] & (raw[fq] > 0)
+    return int((raw[fq][straight] > threshold).sum()), int(straight.sum())
+
+
 def analyse(run_dir, model, sets=(), mp_over=None, verbose=True, flat=None):
     stl = os.path.join(HERE, "input_models", f"{model}.stl")
     work = os.path.join(run_dir, model)

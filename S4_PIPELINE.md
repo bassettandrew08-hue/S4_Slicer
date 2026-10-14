@@ -176,6 +176,7 @@ and compare runs.
 | `params_used.json` | the complete settings for this run |
 | `timings_fast.json` | stage timings and stats |
 | `deformed_points.npy` | deformed vertex positions |
+| `map_src.npy` | for each G00/G01 line of the final G-code, the planar point it came from (diagnostics, `--impl fast`) |
 
 ## 5. Known limitations
 

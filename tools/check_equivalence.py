@@ -42,7 +42,10 @@ def main():
     ap.add_argument("--tol-e", type=float, default=1e-4)
     ap.add_argument("--params")
     ap.add_argument("--notebook-exact", action="store_true", help="pass --notebook-exact to both runs")
-    ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="extra args for the candidate run")
+    ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                    help="setting for both runs (s4_slice.py --set), e.g. --set MAP_SMOOTH=0.5; repeatable")
+    ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[],
+                    help="extra args for the candidate run only (must come last); use --set for settings both need")
     a = ap.parse_args()
 
     name = os.path.splitext(os.path.basename(a.model))[0]
@@ -54,6 +57,8 @@ def main():
     extra = ["--params", a.params] if a.params else []
     if a.notebook_exact:
         extra.append("--notebook-exact")
+    for kv in a.set:
+        extra += ["--set", kv]
 
     if not a.reference_dir or not os.path.exists(ref_out):
         run([PY, "s4_slice.py", a.model, "--impl", "reference", "--work-dir", ref_dir, "-o", ref_out] + extra)

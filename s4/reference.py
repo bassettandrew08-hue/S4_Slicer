@@ -15,6 +15,7 @@ Do NOT optimize this file. Put faster code in s4/fast_deform.py / s4/fast_map.py
 own style are copied verbatim from the notebook on purpose, so the two can be diffed: don't reformat them.
 """
 import base64
+import math
 import pickle
 import time
 
@@ -942,6 +943,26 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
         SMOOTH_EXTRUSION_MULTIPLIER = mp["SMOOTH_EXTRUSION_MULTIPLIER"]
         EXTRUSION_MULTIPLIER_RANGE = mp["EXTRUSION_MULTIPLIER_RANGE"]
         SAFE_TRAVEL_TRANSITIONS = mp["SAFE_TRAVEL_TRANSITIONS"]
+        MAX_C_STEP = math.radians(mp.get("MAX_C_STEP", 0) or 0)  # not in the notebook (off by default)
+        smoothed = None
+        if mp.get("MAP_SMOOTH", 0) and mp["MAP_SMOOTH"] > 0:  # not in the notebook (off by default)
+            # MAP_SMOOTH: map every point first, then re-fit the displacement along the printed runs with the shared
+            # smoothing step (s4/fast_map.py smooth_mapping); the loop below uses the smoothed positions
+            from .fast_map import smooth_mapping
+            all_pos = np.array([p["position"] for p in gcode_points], dtype=float)
+            all_new = all_pos.copy()
+            all_ok = np.zeros(len(gcode_points), bool)
+            for k, (gp, cc) in enumerate(zip(gcode_points, gcode_points_containing_cells)):
+                vi = deformed_tet.field_data["cells"][cc]
+                cv = deformed_tet.field_data["cell_vertices"][vi]
+                bc = calc_barycentric_coordinates(cv[0], cv[1], cv[2], cv[3], gp["position"])
+                if np.sum(bc) > 1.01:
+                    continue
+                all_ok[k] = True
+                all_new[k] = gp["position"] - np.sum(vertex_transformations[vi] * bc[:, None], axis=0)
+            g_like = {"command": [p["command"] for p in gcode_points], "extrusion": [p["extrusion"] for p in gcode_points]}
+            smoothed = smooth_mapping(all_pos, all_new, all_ok, g_like, RETRACTION_LENGTH, float(mp["MAP_SMOOTH"]),
+                                      float(mp.get("MAP_SMOOTH_MAX", 0.2)))
         last_bary = {}
         lost_vertices = []
         highest_printed_point = 0
@@ -980,6 +1001,8 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
             dont_smooth_rotation = False
             reentry = None
             new_position, rotation = barycentric_interpolate_to_get_new_position_and_rotation(position, containing_cell_index, command, cell_index)
+            if smoothed is not None and new_position is not None:
+                new_position = smoothed[cell_index].copy()
             if new_position is None:
                 if command == "G01":
                     lost_vertices.append(position)
@@ -1039,9 +1062,33 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
                     "extrusion_multiplier": extrusion_multiplier, "feed": gcode_point["feed"],
                     "travelling": prev_travelling, "e_only": True})
 
-            if prev_rotation is not None and prev_new_position is not None and np.abs(rotation - prev_rotation) > ROTATION_MAX_DELTA:
+            # not in the notebook (off by default): MAX_C_STEP splits print moves near the turntable axis so none
+            # sweeps more than MAX_C_STEP of C (the machine moves C and X linearly)
+            num_c_steps = 1
+            if MAX_C_STEP and prev_new_position is not None and motion_extrusion is not None and motion_extrusion > 0:
+                d_theta = (math.atan2(float(new_position[1]), float(new_position[0]))
+                           - math.atan2(float(prev_new_position[1]), float(prev_new_position[0])))
+                d_theta = abs((d_theta + math.pi) % (2 * math.pi) - math.pi)
+                if d_theta > MAX_C_STEP:
+                    num_c_steps = int(d_theta / MAX_C_STEP) + 1
+            if num_c_steps > 1 and np.abs(rotation - prev_rotation) <= ROTATION_MAX_DELTA:
+                delta_pos = new_position - prev_new_position
                 delta_rotation = rotation - prev_rotation
-                num_interpolations = int(np.abs(delta_rotation) / ROTATION_MAX_DELTA) + 1
+                for i in range(num_c_steps):
+                    new_gcode_points.append({
+                        "position": prev_new_position + (delta_pos * ((i + 1) / num_c_steps)),
+                        "original_position": position,
+                        "rotation": prev_rotation + (delta_rotation * ((i + 1) / num_c_steps)),
+                        "command": move_command,
+                        "extrusion": motion_extrusion / num_c_steps,
+                        "inv_time_feed": inv_time_feed * num_c_steps if inv_time_feed is not None else None,
+                        "extrusion_multiplier": extrusion_multiplier,
+                        "feed": gcode_point["feed"],
+                        "travelling": travelling
+                    })
+            elif prev_rotation is not None and prev_new_position is not None and np.abs(rotation - prev_rotation) > ROTATION_MAX_DELTA:
+                delta_rotation = rotation - prev_rotation
+                num_interpolations = max(int(np.abs(delta_rotation) / ROTATION_MAX_DELTA) + 1, num_c_steps)
                 delta_pos = new_position - prev_new_position
                 for i in range(num_interpolations):
                     new_gcode_points.append({
