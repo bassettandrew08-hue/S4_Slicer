@@ -176,12 +176,15 @@ details.inner > summary::after { order: -1; margin: 0 2px 0 0; }
 #slicer #copyspec { margin: 2px 0 6px; }
 [hidden] { display: none !important; }
 @media (max-width: 1080px) {
-  .app { height: auto; grid-template-columns: 1fr; grid-template-rows: 52px 62vh 54px auto auto; grid-template-areas: "top" "view" "transport" "right" "left"; }
+  .app { height: auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: 52px 62vh 54px auto auto; grid-template-areas: "top" "view" "transport" "right" "left"; }
+  #filename { flex: 0 1 auto; min-width: 0; }
+  .brand b { white-space: nowrap; }
   aside.left, aside.right { border: 0; border-top: 1px solid var(--line); }
   #moveinfo, .brand span { display: none; }
   #legend { width: 210px; }
   #inspect { width: calc(100% - 24px); bottom: auto; top: 50px; }
 }
+@media (max-width: 560px) { .top [data-demo], .brand b { display: none; } .transport { gap: 4px; padding: 0 8px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
@@ -1262,11 +1265,11 @@ const SHADOW_CAST_MAX = 400000; // bead segments: above this the part casts no s
 (() => {
   const env = new THREE.Scene();
   const g = new THREE.SphereGeometry(100, 32, 16), col = [], p = g.attributes.position;
-  for (let k = 0; k < p.count; k++) { const t = p.getY(k) / 100; const v = t > 0 ? 0.16 + 0.22 * t : 0.05 + 0.11 * (1 + t); col.push(v * 0.95, v, v * 1.08); }
+  for (let k = 0; k < p.count; k++) { const t = p.getY(k) / 100; const v = t > 0 ? 0.16 + 0.22 * t : 0.09 + 0.07 * (1 + t); col.push(v * 0.95, v, v * 1.08); }
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   env.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ side: THREE.BackSide, vertexColors: true })));
   const box = (w, h, x, y, z, v) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(v, v, v * 0.97), side: THREE.DoubleSide })); m.position.set(x, y, z); m.lookAt(0, 0, 0); env.add(m); };
-  box(70, 40, 30, 80, 40, 3.2); box(50, 90, -85, 25, -30, 1.4); box(90, 20, 0, 30, -90, 0.9); box(40, 40, 60, 10, -70, 0.7);
+  box(70, 40, 30, 80, 40, 3.2); box(50, 90, -85, 25, -30, 1.4); box(90, 20, 0, 30, -90, 0.9); box(40, 40, 60, 10, -70, 0.7); box(120, 120, 0, -90, 0, 0.35); // the last: light bouncing off the floor, so downward faces are not black
   const pm = new THREE.PMREMGenerator(renderer);
   scene.environment = pm.fromScene(env, 0.02).texture;
   pm.dispose();
@@ -1914,7 +1917,7 @@ function inspectMove(i, issue, s) {
   else status = STATUS_TEXT[lastSupport.status[s]](lastSupport.runLen[s]);
   $('#inspectbody').innerHTML = `<div class="ih"><b>Line ${(ln + 1).toLocaleString()}</b><span class="muted">Move ${(i + 1).toLocaleString()}</span></div>
     <div class="icode">${txt}</div>
-    <div class="muted">B ${fmt(P.cmd[b + 2], 2)}°, C ${fmt(P.cmd[b + 3], 1)}°, X ${fmt(P.cmd[b], 2)}, Z ${fmt(P.cmd[b + 1], 2)}</div>
+    <div class="muted">B ${fmt(P.cmd[b + 2], 2)}°, C ${fmt(P.cmd[b + 3], 1)}°, X ${fmt(P.cmd[b], 2)}, Z ${fmt(P.cmd[b + 1], 2)}${s >= 0 && P.beadW ? ` · bead ${fmt(P.beadW[s], 2)} wide, ${fmt(P.beadH[s], 2)} thick` : ''}</div>
     <div>${status}</div>`;
   $('#inspect').dataset.move = i;
   $('#inspect').hidden = false;
