@@ -25,6 +25,9 @@ DEFAULT_PARAMS = dict(
     # Mesh preparation (not in the notebook): coarsen needlessly fine surface tessellation before TetGen
     # (meshio_s4.simplify_surface). 0 = off, the notebook's mesh. ~1e-5 moves the surface ~0.01 mm
     SURFACE_SIMPLIFY_ERROR=0.0,
+    # Mesh density (not in the notebook): largest tet volume in mm^3 for TetGen (fixedvolume). None = TetGen's
+    # default mesh (no volume limit), the notebook's. Smaller = denser mesh, smoother deformation, slower
+    TET_MAX_VOLUME=None,
     # How the rotation field becomes a deformed mesh:
     #   "island_free" (default): fold-free fit + lifting of height minima that would print as floating islands
     #   "notebook": the notebook's least-squares solve (reproduces main.ipynb; folds and leaves islands)

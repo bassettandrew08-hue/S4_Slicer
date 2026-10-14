@@ -46,6 +46,7 @@ from it.
 | `MAX_POS_ROTATION`, `MAX_NEG_ROTATION` | ±360° | clamp on the target rotation |
 | `PART_OFFSET` | [0, 0, 0] | shift the part on the plate, in mm (subtracted) |
 | `SURFACE_SIMPLIFY_ERROR` | 0 (off) | not in the notebook. Coarsen needlessly fine surface triangles before TetGen (quadric error bound; `1e-5` ≈ 0.01 mm). For CAD exports that draw small holes with tiny segments: TetGen fills them with microscopic tets that the deformation tears apart. The log prints how far the surface moved. Whole run only, not per iteration |
+| `TET_MAX_VOLUME` | null (off) | not in the notebook. Largest tet volume in mm^3 for TetGen (`fixedvolume`): a denser mesh, for a smoother deformation. null = TetGen's default mesh. Run time grows about in proportion to the tet count (see [DEVELOPING.md](DEVELOPING.md#where-the-time-goes)). Whole run only, not per iteration |
 | `ROTATION_ITERATIONS` | 100 | solver budget for the tilt field. Changing it changes the result, not just the speed |
 | `iterations` | (none) | multi-iteration schedule, see above |
 
