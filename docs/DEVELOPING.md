@@ -56,6 +56,7 @@ The roughness count depends on point spacing, so compare it only between runs wi
 ### Other tools
 | tool | what it does |
 |---|---|
+| `tools/layer_lines.py RUN_DIR [...]` | how smoothly the layer lines run over a model's visible outer surface (`layer_turns_<region>` in the suite; regions in its `REGIONS`): total turning of the deformed-height contours on the surface triangles. Low = parallel bands; rings, kinks and crossing lines add to it |
 | `tools/compare_gcode.py a.gcode b.gcode` | compares any two 4-axis files line by line, with tolerances |
 | `tools/check_print_time.py` | checks that the pipeline's print-time estimate (`s4/print_time.py`) equals R-Theta Sim's on the fixtures in `tools/fixtures/`. Run it after changing either planner, and refresh its expected numbers from the sim (the script says how) |
 | `s4_slice.py model.stl --notebook-exact` | reproduces old notebook results |

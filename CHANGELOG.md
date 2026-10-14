@@ -7,6 +7,7 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 
 **Entries**
 - [2026-10-14: Faster pipeline, same output; denser meshes (TET_MAX_VOLUME)](#2026-10-14-faster-pipeline-same-output-denser-meshes-tet_max_volume)
+- [2026-10-14: The benchy's choppy hull; mesh density setting](#2026-10-14-the-benchys-choppy-hull-mesh-density-setting)
 - [2026-10-14: Where the path roughness comes from; opt-in smoother mapping](#2026-10-14-where-the-path-roughness-comes-from-opt-in-smoother-mapping)
 - [2026-10-07: Meshes with CAD-export junk, support check on large prints](#2026-10-07-meshes-with-cad-export-junk-support-check-on-large-prints)
 - [2026-10-01: Smoother lifted surfaces, six-model quality suite](#2026-10-01-smoother-lifted-surfaces-six-model-quality-suite)
@@ -50,6 +51,64 @@ benchy 53.3 -> 36.8 s, axis model 90.1 -> 61.3 s. Per stage: [DEVELOPING.md](doc
 least squares and the `island_free` solve, now most of the time. A numba port of scipy's LSMR (bit-identical, it
 calls numpy's own BLAS dot) was tried and dropped: the time is in OpenBLAS's threaded dot products (~0.5 ms each
 here) and the sparse mat-vecs, not in Python, so it saved nothing.
+
+---
+
+## 2026-10-14: The benchy's choppy hull; mesh density setting
+
+### Diagnosis
+The chop on the benchy's hull (sides of the hull, above the cabin's front and back ends, z ~28-42 in the part's
+frame, both sides) is where the island lift reshaped the surface. Every layer line on the outer surface is a contour
+of the deformed height; drawn on the surface's triangles (scratch render, and in R-Theta Sim), the hull's lines run
+in smooth parallel bands everywhere except in the lifted patch, where they turn into wide, wandering, polygonal
+loops that cross the neighbouring bands. Two parts to it:
+- The lift fills a pit to the "flood" level, a surface rising at `ISLAND_LIFT_SLOPE` from the pit's rim, so the hull
+  there becomes nearly parallel to the layers (grazing): lines far apart, closed rings around the high points. 921
+  of the 953 pit vertices are surface vertices: the pit is the hull's skin.
+- Where the layers graze the surface, mesh-scale height noise (the flood is a graph-path cone; the lift rounds add
+  targets round by round) moves the lines a lot: they follow the triangle edges.
+The fit alone (no lift) draws the hull smoothly: hull `layer_turns` 384 vs 538 with the lift, 200 for a flat print.
+
+### Added
+- **`tools/layer_lines.py`** and the suite metric **`layer_turns_hull`** (benchy only for now): the total turning
+  of the layer lines over the visible hull exterior (z > 26.5), in full turns, computed from the deformed mesh on
+  the surface triangles. A closed ring counts 1; lines that kink at tet faces or wander where layers graze count a
+  lot. It follows what the sim shows, and is about mesh-independent (a flat print: 200 on every mesh tried).
+  `layer_kink_turns_hull` counts only kinks over 15 deg at one edge.
+- **`TET_MAX_VOLUME`** (deform, default 0 = off): caps every tet's volume (TetGen `-a`), a finer mesh. Used by the
+  deformation, the reference port and the support check alike, so the support check re-tetrahedralizes the same mesh.
+
+### Changed
+- **`params/benchy upsidedown tilted.json`** (new; benchy only): `MAX_OVERHANG` 20, `ISLAND_LIFT_SLOPE` 0.2,
+  `LIFT_HOLD_FALLOFF` 5. More tilt leaves a smaller pit for the lift (570 lifted vertices instead of 977), and the
+  gentler lift with a soft-edged hold puts fewer crossing lines into the hull. The sim shows clean parallel bands
+  over most of the hull, with concentric rings (smooth, not crossing) where the lift remains.
+
+| benchy | default (branch) | profile |
+|---|---|---|
+| hull `layer_turns` (kinks) | 538 (301) | 411 |
+| ungrounded total (walls/skin) | 41.4 (21.9) mm | 19.8 (1.8) mm |
+| island walls / cantilever walls | 10.5 / 1.0 mm | 2.6 / 6.9 mm |
+| zigzag / surface_rough_pct / waviness | 4629 / 1.06 / 674 | 3937 / 0.92 / 185 |
+| tilt | 49.4 deg | 56.5 deg |
+| print time | 151.3 min | 160.7 min |
+
+The one thing that gets worse is cantilevered wall (1.0 -> 6.9 mm); unsupported and island walls drop much more.
+
+### Tried and not adopted (hull `layer_turns`, deform only, same rotation field; default 538)
+| change | layer_turns | why not |
+|---|---|---|
+| `TET_MAX_VOLUME` 1 / 0.5 / 0.25 (45k / 67k / 122k tets) | 524 / 530 / 608 | no better; deform 94 / ~500 / 308 s vs 91 s (lift solves dominate) |
+| `ISLAND_LIFT_SLOPE` 0.3 / 0.2 | 470 / 430 | in the profile (0.2) |
+| `LIFT_HOLD_FALLOFF` 5 / 10 | 494 / 475 | in the profile (5) |
+| `LIFT_ITERATIONS` 300, `LIFT_HOLD` 0, two-sided lift | 538 / 532 / 526 | no effect |
+| old (unanchored) lift | 624 | worse |
+| smoothing the lift's displacement afterwards (20-200 passes) | 497-395 | undoes the lift: island mass 0 -> 25-100 |
+| smooth upper bound of the lift targets (dilate + Gaussian, 1-4 mm) | 572-754 | lifts more area: worse |
+| refit: the lift's extra rotations (smoothed over 3 mm) added to the target rotations, fit and lift again, x2 | 465 | with the profile: 413 vs 411, cantilever walls 15.9 mm |
+| `MAX_OVERHANG` 20 alone / 25 + slope 0.2 | 480 / 412 | cantilever walls 8.2 / 10.5 mm |
+
+The code for the three lift experiments is not kept.
 
 ---
 

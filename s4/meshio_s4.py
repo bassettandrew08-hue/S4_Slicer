@@ -53,7 +53,7 @@ def tetrahedralize(vertices, faces, max_volume=None):
     (self-intersections), retry once on the clean_surface version; meshes that tetrahedralize as they are never reach
     the cleanup."""
     t0 = time.time()
-    kw = {} if max_volume is None else {"fixedvolume": True, "maxvolume": float(max_volume)}
+    kw = {"fixedvolume": True, "maxvolume": float(max_volume)} if max_volume else {}  # None or 0 = no limit
     try:
         tg = tetgen.TetGen(vertices, faces)
         tg.tetrahedralize(**kw)
