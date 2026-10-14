@@ -357,6 +357,7 @@ const DEFAULTS = {
   beadArcDeg: 3,
   beadShape: 'flow',
   beadHeight: 0, // 0 = the file's layer height (else layerH)
+  lighting: 'classic',
 };
 
 const SCHEMA = [
@@ -422,6 +423,7 @@ const SCHEMA = [
     ['beadWidth', 'Bead width', 'mm', ''],
     ['beadArcDeg', 'Bead smoothness', 'deg per segment', 'Lower is smoother on large C moves.'],
     ['beadShape', 'Bead shape', 'select', 'From the plastic: as thick as a layer (along the nozzle) and as wide as the E value fills, hanging below the nozzle tip.', [['flow','From the plastic laid'],['round','Round, bead width']]],
+    ['lighting', 'Lighting', 'select', 'Classic is the look of earlier versions, so renders compare. Studio adds reflections and shadows.', [['classic','Classic'],['studio','Studio (reflections, shadows)']]],
     ['beadHeight', 'Bead thickness', 'mm', '0 uses the layer height in the file header (or the support-check layer height). Beads on the bed are as thick as the gap under the tip.'],
   ]},
 ];
@@ -1269,6 +1271,7 @@ vp.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(38, 1, 0.5, 5000);
 const SHADOW_CAST_MAX = 400000; // bead segments: above this the part casts no shadow (it would double the draw cost)
+let envTex = null;
 // Image-based light: a small studio (soft boxes over a dark floor) baked into an environment map, so metal and
 // plastic get real reflections instead of flat shading.
 (() => {
@@ -1280,15 +1283,14 @@ const SHADOW_CAST_MAX = 400000; // bead segments: above this the part casts no s
   const box = (w, h, x, y, z, v) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(v, v, v * 0.97), side: THREE.DoubleSide })); m.position.set(x, y, z); m.lookAt(0, 0, 0); env.add(m); };
   box(70, 40, 30, 80, 40, 3.2); box(50, 90, -85, 25, -30, 1.4); box(90, 20, 0, 30, -90, 0.9); box(40, 40, 60, 10, -70, 0.7); box(120, 120, 0, -90, 0, 0.35); // the last: light bouncing off the floor, so downward faces are not black
   const pm = new THREE.PMREMGenerator(renderer);
-  scene.environment = pm.fromScene(env, 0.02).texture;
+  envTex = pm.fromScene(env, 0.02).texture;
   pm.dispose();
 })();
-scene.add(new THREE.HemisphereLight(0xe9eef4, 0x151a20, 0.45));
-const keyLight = new THREE.DirectionalLight(0xfff4e6, 0.75); keyLight.position.set(220, 520, 260); scene.add(keyLight);
-keyLight.castShadow = true;
+const hemiLight = new THREE.HemisphereLight(0xe9eef4, 0x151a20, 0.9); scene.add(hemiLight);
+const keyLight = new THREE.DirectionalLight(0xfff6ea, 0.8); keyLight.position.set(260, 460, 320); scene.add(keyLight);
 keyLight.shadow.mapSize.set(2048, 2048);
 keyLight.shadow.bias = -0.001; keyLight.shadow.normalBias = 1; keyLight.shadow.radius = 3; // beads are thinner than a shadow texel: a 1 mm normal offset keeps them from speckling with self-shadow
-const rimLight = new THREE.DirectionalLight(0x9cc4ff, 0.3); rimLight.position.set(-320, 220, -280); scene.add(rimLight);
+const rimLight = new THREE.DirectionalLight(0x9cc4ff, 0.35); rimLight.position.set(-320, 220, -280); scene.add(rimLight);
 function fitShadow() { // the shadow camera covers the bed and the head's reach
   const R = Math.max(S.bedDiameter / 2, S.xMax) + 75, c = keyLight.shadow.camera; // reaches past the column
   c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.near = 100; c.far = 1400; c.updateProjectionMatrix();
@@ -1298,21 +1300,57 @@ const floor = new THREE.Mesh(new THREE.CircleGeometry(460, 96), new THREE.MeshBa
 floor.rotation.x = -Math.PI / 2; floor.position.y = -8; scene.add(floor);
 const root = new THREE.Group(); scene.add(root);
 let bedGroup, headGroup, tipObj, arm, zCar, column, beadMesh, markerMesh, previewLine, beadGeo, liveBead, travelLines, retractPts;
-const matFrame = new THREE.MeshStandardMaterial({ color: '#3b4350', metalness: 0.6, roughness: 0.45 });
-const matAlu = new THREE.MeshStandardMaterial({ color: '#c3cbd4', metalness: 0.85, roughness: 0.32 });
-const matPrinted = new THREE.MeshStandardMaterial({ color: '#2c323a', roughness: 0.62 });
-const matBlock = new THREE.MeshStandardMaterial({ color: '#d4d8dd', metalness: 0.9, roughness: 0.28 });
-const matBrass = new THREE.MeshStandardMaterial({ color: '#e0ad55', metalness: 1, roughness: 0.22 });
-const matBead = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.48, metalness: 0, envMapIntensity: 0.7 });
-const matLive = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.48, metalness: 0, envMapIntensity: 0.7 });
+const matFrame = new THREE.MeshStandardMaterial({ color: '#3b4350' });
+const matAlu = new THREE.MeshStandardMaterial({ color: '#b3bcc6' });
+const matPrinted = new THREE.MeshStandardMaterial({ color: '#2c323a' });
+const matBlock = new THREE.MeshStandardMaterial({ color: '#c9ced4' });
+const matBrass = new THREE.MeshStandardMaterial({ color: '#d6a650' });
+const matBead = new THREE.MeshStandardMaterial({ color: '#ffffff', metalness: 0 });
+const matLive = new THREE.MeshStandardMaterial({ color: '#ffffff', metalness: 0 });
+const matPlate = new THREE.MeshStandardMaterial({ color: '#262c33' });
+const matBedTop = new THREE.MeshStandardMaterial({ color: '#1d3a31' });
+// Two looks. Classic is the sim's original lighting (no reflections, no shadows), so renders of the same G-code from
+// older and newer versions compare; Studio adds an environment map, shadows and shinier metal. Per material:
+// [classic colour, metalness, roughness, envMapIntensity] then the same for studio.
+const LOOKS = [
+  [matFrame, ['#3b4350', 0.55, 0.5, 1], ['#3b4350', 0.6, 0.45, 1]],
+  [matAlu, ['#b3bcc6', 0.6, 0.38, 1], ['#c3cbd4', 0.85, 0.32, 1]],
+  [matPrinted, ['#2c323a', 0, 0.75, 1], ['#2c323a', 0, 0.62, 1]],
+  [matBlock, ['#c9ced4', 0.7, 0.32, 1], ['#d4d8dd', 0.9, 0.28, 1]],
+  [matBrass, ['#d6a650', 0.85, 0.25, 1], ['#e0ad55', 1, 0.22, 1]],
+  [matBead, ['#ffffff', 0, 0.6, 1], ['#ffffff', 0, 0.48, 0.7]],
+  [matLive, ['#ffffff', 0, 0.6, 1], ['#ffffff', 0, 0.48, 0.7]],
+  [matPlate, ['#262c33', 0.4, 0.6, 1], ['#262c33', 0.7, 0.4, 1]],
+  [matBedTop, ['#1d3a31', 0, 0.85, 1], ['#1d3a31', 0, 0.7, 0.6]],
+];
+let lookNow = null;
+function applyLighting() {
+  const studio = S.lighting === 'studio';
+  if (lookNow === S.lighting) return;
+  lookNow = S.lighting;
+  scene.environment = studio ? envTex : null;
+  renderer.shadowMap.enabled = studio; keyLight.castShadow = studio;
+  hemiLight.intensity = studio ? 0.45 : 0.9;
+  keyLight.color.set(studio ? 0xfff4e6 : 0xfff6ea); keyLight.intensity = studio ? 0.75 : 0.8;
+  keyLight.position.set(...(studio ? [220, 520, 260] : [260, 460, 320]));
+  rimLight.intensity = studio ? 0.3 : 0.35;
+  for (const [m, classic, st] of LOOKS) {
+    const v = studio ? st : classic;
+    m.color.set(v[0]); m.metalness = v[1]; m.roughness = v[2]; m.envMapIntensity = v[3]; m.needsUpdate = true;
+  }
+  invalidate();
+}
 // Beads thinner than a few pixels on screen alias: each bead's round cross-section shades light on top and dark at the
 // sides, and sampling those sub-pixel stripes makes moire swirls that look like surface defects. As a bead shrinks
 // below about 5 px of thickness its normal is blended toward the view direction within its cross-section (about the
-// average normal you see of it), so far beads shade smoothly and close ones keep their layer lines.
+// average normal you see of it), so far beads shade smoothly and close ones keep their layer lines. A smooth normal
+// lights every pixel of the bead fully, but a real bead's visible normals spread out and some face away from the light,
+// so far beads are also dimmed (to 0.7), which keeps the part as bright as the sharp, round beads looked before.
 const beadPx = { value: 1 }; // pixels per (mm of bead thickness / mm of view depth); set in resize()
 function smoothFarBeads(shader) {
   shader.uniforms.beadPxScale = beadPx;
-  shader.vertexShader = 'uniform float beadPxScale;\n' + shader.vertexShader.replace('#include <defaultnormal_vertex>', `#include <defaultnormal_vertex>
+  shader.fragmentShader = 'varying float vBeadFar;\n' + shader.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n  diffuseColor.rgb *= 1.0 - 0.3 * vBeadFar;');
+  shader.vertexShader = 'uniform float beadPxScale;\nvarying float vBeadFar;\n' + shader.vertexShader.replace('#include <defaultnormal_vertex>', `#include <defaultnormal_vertex>
   {
     #ifdef USE_INSTANCING
       mat4 bm = modelViewMatrix * instanceMatrix;
@@ -1330,6 +1368,7 @@ function smoothFarBeads(shader) {
     float ca = dot(vw, xa), cz = dot(vw, za);
     vec3 vq = ca * abs(ca) * xa + cz * abs(cz) * za;
     float kk = 1.0 - smoothstep(1.5, 5.0, px);
+    vBeadFar = min(1.0, 1.5 * kk);
     if (kk > 0.0 && dot(vq, vq) > 1e-6) transformedNormal = normalize(mix(normalize(transformedNormal), normalize(vq), kk));
   }`);
 }
@@ -1337,7 +1376,7 @@ matBead.onBeforeCompile = smoothFarBeads; matLive.onBeforeCompile = smoothFarBea
 let sceneDirty = true; const invalidate = () => { sceneDirty = true; };
 const PREVIEW_MOVES = 400, PREVIEW_VERTS = PREVIEW_MOVES * 2 * 16;
 
-const SHARED = new Set([matFrame, matAlu, matPrinted, matBlock, matBrass, matBead, matLive]);
+const SHARED = new Set([matFrame, matAlu, matPrinted, matBlock, matBrass, matBead, matLive, matPlate, matBedTop]);
 function disposeTree(obj) { // free the GPU buffers of machine parts that are rebuilt (shared materials and beadGeo stay)
   obj.traverse(o => {
     if (o === beadMesh || o === markerMesh || o === travelLines || o === retractPts) return;
@@ -1348,23 +1387,25 @@ function disposeTree(obj) { // free the GPU buffers of machine parts that are re
 function buildMachine() {
   disposeTree(root);
   root.clear();
-  fitShadow();
+  fitShadow(); applyLighting();
   const bedR = S.bedDiameter / 2, L = S.nozzleOffset;
   bedGroup = new THREE.Group(); root.add(bedGroup);
-  const plate = new THREE.Mesh(new THREE.CylinderGeometry(bedR, bedR, 4, 128), new THREE.MeshStandardMaterial({ color: '#262c33', metalness: 0.7, roughness: 0.4 }));
+  const plate = new THREE.Mesh(new THREE.CylinderGeometry(bedR, bedR, 4, 128), matPlate);
   plate.position.y = -2.05; plate.receiveShadow = true; bedGroup.add(plate);
-  const top = new THREE.Mesh(new THREE.CircleGeometry(bedR - 2.5, 128), new THREE.MeshStandardMaterial({ color: '#1d3a31', roughness: 0.7, envMapIntensity: 0.6 }));
+  const top = new THREE.Mesh(new THREE.CircleGeometry(bedR - 2.5, 128), matBedTop);
   top.rotation.x = -Math.PI / 2; top.position.y = -0.04; top.receiveShadow = true; bedGroup.add(top);
   const ringMat = new THREE.LineBasicMaterial({ color: 0x2c5446, transparent: true, opacity: 0.6 });
   for (let r = 25; r < bedR - 5; r += 25) {
     const pts = []; for (let k = 0; k <= 128; k++) { const a = k / 128 * Math.PI * 2; pts.push(new THREE.Vector3(r * Math.cos(a), -0.02, r * Math.sin(a))); }
     bedGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ringMat));
   }
-  // degree marks at the rim every 15 degrees (longer every 90), so you can see the bed turn
-  const tk = [];
-  for (let d = 0; d < 360; d += 15) { const a = rad(d), r0 = bedR - 3 - (d % 90 ? 4 : 9); tk.push(r0 * Math.cos(a), -0.01, r0 * Math.sin(a), (bedR - 3) * Math.cos(a), -0.01, (bedR - 3) * Math.sin(a)); }
-  const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.Float32BufferAttribute(tk, 3));
-  bedGroup.add(new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x4f8a76, transparent: true, opacity: 0.8 })));
+  // degree marks at the rim every 15 degrees (longer every 90), so you can see the bed turn (studio look only)
+  if (S.lighting === 'studio') {
+    const tk = [];
+    for (let d = 0; d < 360; d += 15) { const a = rad(d), r0 = bedR - 3 - (d % 90 ? 4 : 9); tk.push(r0 * Math.cos(a), -0.01, r0 * Math.sin(a), (bedR - 3) * Math.cos(a), -0.01, (bedR - 3) * Math.sin(a)); }
+    const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.Float32BufferAttribute(tk, 3));
+    bedGroup.add(new THREE.LineSegments(tg, new THREE.LineBasicMaterial({ color: 0x4f8a76, transparent: true, opacity: 0.8 })));
+  }
   // small tick at the rim at C = 0
   const tick = new THREE.Mesh(new THREE.BoxGeometry(10, 0.6, 3), new THREE.MeshStandardMaterial({ color: '#f5b942', emissive: '#3a2a00' }));
   tick.position.set(bedR - 7, 0.05, 0); bedGroup.add(tick);

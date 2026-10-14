@@ -38,8 +38,10 @@ demo** shows a sample cup.
   (which would look like surface defects); zoom in and the layer lines appear.
 - **Travel and retractions** (View panel, off by default): every move that lays no plastic, up to the current move,
   with a red dot where filament is pulled back and a green dot where it is pushed in without the tip moving.
-- The view only redraws when something changes, so a large print costs nothing while it sits still. The part casts a
-  shadow on the bed up to 400,000 bead segments.
+- The view only redraws when something changes, so a large print costs nothing while it sits still.
+- **Lighting** (Settings, Display): **Classic**, the default, is the sim's original lighting, so renders from older and
+  newer versions of the sim compare. **Studio** adds reflections, shadows (the part casts one up to 400,000 bead
+  segments) and degree marks on the bed rim.
 
 ## Colour modes
 
