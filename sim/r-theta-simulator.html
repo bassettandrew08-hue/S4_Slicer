@@ -804,13 +804,118 @@ async function preflight(S, P, onProgress) {
   for (let t = S.ignoreTip; t < S.bodyStart; t += 2) shaftTs.push(t);
   const bodyTs = [S.bodyStart, S.bodyStart + S.bodyLen];
   const fmt = v => (Math.round(v * 100) / 100).toString();
+  // number of poses checked along a move: one per 5 deg of C or B, or 4 mm of tip travel (at least the end pose)
+  const ta = [0, 0, 0], tb2 = [0, 0, 0];
+  const headSamples = (b0, b1) => {
+    const A = P.act;
+    tipMachine(S, A[b0], A[b0 + 1], A[b0 + 2], tm); machineToBed(S, tm[0], tm[1], 0, A[b0 + 3], ta);
+    tipMachine(S, A[b1], A[b1 + 1], A[b1 + 2], tm); machineToBed(S, tm[0], tm[1], 0, A[b1 + 3], tb2);
+    const chord = Math.hypot(tb2[0] - ta[0], tb2[1] - ta[1], tb2[2] - ta[2]);
+    return Math.min(16, Math.max(1, Math.ceil(Math.abs(A[b1 + 3] - A[b0 + 3]) / 5), Math.ceil(Math.abs(A[b1 + 2] - A[b0 + 2]) / 5), Math.ceil(chord / 4)));
+  };
+  // nozzle tip, shaft and heater block against the bed and earlier plastic, at one pose; true if it flagged something
+  const headHits = (i, Xa, Za, Ba, Ca) => {
+    tipMachine(S, Xa, Za, Ba, tm);
+    const r = tm[0], y = tm[1], sb = tm[2], cb = tm[3];
+    if (y < -0.05) { machineToBed(S, r, y, 0, Ca, q); add('bed', i, 'Nozzle tip goes below the bed surface', q); return true; }
+    for (const t of shaftTs) {
+      const x = r - t * sb, yy = y + t * cb;
+      machineToBed(S, x, yy, 0, Ca, q);
+      if (yy < 0 && Math.hypot(q[0], q[2]) < bedR) { add('bed', i, 'Nozzle shaft hits the bed', q); return true; }
+      if (hit(q[0], q[1], q[2], rShaft)) { add('part', i, 'Nozzle may hit printed plastic', q); return true; }
+    }
+    for (const t of bodyTs) {
+      const cx = r - t * sb, cy = y + t * cb;
+      for (let k = 0; k < ringN; k++) {
+        const x = cx + S.bodyR * ringC[k] * cb, yy = cy + S.bodyR * ringC[k] * sb, z = S.bodyR * ringS[k];
+        machineToBed(S, x, yy, z, Ca, q);
+        if (yy < 0 && Math.hypot(q[0], q[2]) < bedR) { add('bed', i, 'Heater block hits the bed', q); return true; }
+        if (hit(q[0], q[1], q[2], rBody)) { add('part', i, 'Heater block may hit printed plastic', q); return true; }
+      }
+    }
+    return false;
+  };
+  // Tip drag: a line through the lower part of each earlier bead (0.75 layer below the tip path, along the nozzle), in
+  // a 1 mm grid. A travel whose tip comes within 0.3 layer of it is about half a layer deep in the bead: it ploughs
+  // through it. Skimming the top (combing over the layer, landing on the layer below, wiping) stays clear.
+  const dragR = 0.3 * S.layerH, dHalf = 0.75 * S.layerH, dHash = new Map();
+  const dKey = (ix, iy, iz) => ((ix + 8192) * 16384 + (iy + 8192)) * 16384 + (iz + 8192);
+  // offset from a bead's tip path to its lower line: along the nozzle axis made square to the path (as the bead is
+  // drawn); null when the path runs along the nozzle, where "below" means nothing
+  const dO = [0, 0, 0];
+  const dOff = sg => {
+    const o = sg * 6, n3 = sg * 3, ux = P.seg[o + 3] - P.seg[o], uy = P.seg[o + 4] - P.seg[o + 1], uz = P.seg[o + 5] - P.seg[o + 2];
+    const L = Math.hypot(ux, uy, uz); if (L < 1e-9) return null;
+    const nx = P.segN[n3], ny = P.segN[n3 + 1], nz = P.segN[n3 + 2], dt = (nx * ux + ny * uy + nz * uz) / L;
+    const hx = nx - dt * ux / L, hy = ny - dt * uy / L, hz = nz - dt * uz / L, hl = Math.hypot(hx, hy, hz);
+    if (hl < 0.2) return null;
+    dO[0] = hx / hl * dHalf; dO[1] = hy / hl * dHalf; dO[2] = hz / hl * dHalf; return dO;
+  };
+  const dInsertMove = j => {
+    for (let sg = P.beadStart[j]; sg < P.beadStart[j + 1]; sg++) {
+      const off = dOff(sg); if (!off) continue;
+      const o = sg * 6, ox = off[0], oy = off[1], oz = off[2];
+      const len = Math.hypot(P.seg[o + 3] - P.seg[o], P.seg[o + 4] - P.seg[o + 1], P.seg[o + 5] - P.seg[o + 2]);
+      const m = Math.max(1, Math.ceil(len / 0.5));
+      let last = NaN;
+      for (let k = 0; k <= m; k++) {
+        const f = k / m;
+        const kk = dKey(Math.floor(P.seg[o] + (P.seg[o + 3] - P.seg[o]) * f + ox), Math.floor(P.seg[o + 1] + (P.seg[o + 4] - P.seg[o + 1]) * f + oy), Math.floor(P.seg[o + 2] + (P.seg[o + 5] - P.seg[o + 2]) * f + oz));
+        if (kk === last) continue;
+        last = kk;
+        let arr = dHash.get(kk); if (!arr) { arr = []; dHash.set(kk, arr); }
+        if (arr[arr.length - 1] !== sg) arr.push(sg);
+      }
+    }
+  };
+  // squared distance between segments p0-p1 and q0-q1 (closest points, clamped to both segments)
+  const segSeg2 = (p0x, p0y, p0z, p1x, p1y, p1z, q0x, q0y, q0z, q1x, q1y, q1z) => {
+    const ux = p1x - p0x, uy = p1y - p0y, uz = p1z - p0z, vx = q1x - q0x, vy = q1y - q0y, vz = q1z - q0z;
+    const wx = p0x - q0x, wy = p0y - q0y, wz = p0z - q0z;
+    const a = ux * ux + uy * uy + uz * uz, b = ux * vx + uy * vy + uz * vz, c = vx * vx + vy * vy + vz * vz;
+    const d = ux * wx + uy * wy + uz * wz, e = vx * wx + vy * wy + vz * wz, D = a * c - b * b;
+    let sN, sD = D, tN, tD = D;
+    if (D < 1e-12) { sN = 0; sD = 1; tN = e; tD = c; } else { sN = b * e - c * d; tN = a * e - b * d; if (sN < 0) { sN = 0; tN = e; tD = c; } else if (sN > sD) { sN = sD; tN = e + b; tD = c; } }
+    if (tN < 0) { tN = 0; if (-d < 0) sN = 0; else if (-d > a) sN = sD; else { sN = -d; sD = a; } }
+    else if (tN > tD) { tN = tD; if (-d + b < 0) sN = 0; else if (-d + b > a) sN = sD; else { sN = -d + b; sD = a; } }
+    const sc = Math.abs(sN) < 1e-12 ? 0 : sN / sD, tc = Math.abs(tN) < 1e-12 || tD < 1e-12 ? 0 : tN / tD;
+    const dx = wx + sc * ux - tc * vx, dy = wy + sc * uy - tc * vy, dz = wz + sc * uz - tc * vz;
+    return dx * dx + dy * dy + dz * dz;
+  };
+  const p0 = [0, 0, 0], p1 = [0, 0, 0];
+  const tipDrag = (i, b0, b1) => {
+    const A = P.act;
+    let moved = false; for (let k = 0; k < 4; k++) if (A[b1 + k] !== A[b0 + k]) moved = true;
+    if (!moved || !dHash.size) return;
+    const nS = Math.min(400, Math.max(headSamples(b0, b1), Math.ceil(Math.hypot(tb2[0] - ta[0], tb2[1] - ta[1], tb2[2] - ta[2]) / 0.5)));
+    const at = (f, out) => { tipMachine(S, A[b0] + (A[b1] - A[b0]) * f, A[b0 + 1] + (A[b1 + 1] - A[b0 + 1]) * f, A[b0 + 2] + (A[b1 + 2] - A[b0 + 2]) * f, tm); return machineToBed(S, tm[0], tm[1], 0, A[b0 + 3] + (A[b1 + 3] - A[b0 + 3]) * f, out); };
+    at(0, p0);
+    const R = dragR + 0.3, r2 = dragR * dragR;
+    for (let k = 1; k <= nS; k++) {
+      at(k / nS, p1);
+      const x0 = Math.floor(Math.min(p0[0], p1[0]) - R), x1 = Math.floor(Math.max(p0[0], p1[0]) + R);
+      const y0 = Math.floor(Math.min(p0[1], p1[1]) - R), y1 = Math.floor(Math.max(p0[1], p1[1]) + R);
+      const z0 = Math.floor(Math.min(p0[2], p1[2]) - R), z1 = Math.floor(Math.max(p0[2], p1[2]) + R);
+      for (let ix = x0; ix <= x1; ix++) for (let iy = y0; iy <= y1; iy++) for (let iz = z0; iz <= z1; iz++) {
+        const arr = dHash.get(dKey(ix, iy, iz)); if (!arr) continue;
+        for (const sg of arr) {
+          const off = dOff(sg), o = sg * 6, ox = off[0], oy = off[1], oz = off[2];
+          if (segSeg2(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], P.seg[o] + ox, P.seg[o + 1] + oy, P.seg[o + 2] + oz, P.seg[o + 3] + ox, P.seg[o + 4] + oy, P.seg[o + 5] + oz) < r2) {
+            add('drag', i, 'Nozzle tip moves through printed plastic while travelling', [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2]);
+            return;
+          }
+        }
+      }
+      p0[0] = p1[0]; p0[1] = p1[1]; p0[2] = p1[2];
+    }
+  };
 
   for (let i = 0; i < P.n; i++) {
     if ((i & 2047) === 0 && onProgress) await onProgress(i / P.n);
     iCur = i;
     const tp = P.type[i];
     const jj = i - S.ignoreRecent;
-    if (jj >= 0) insertBeadsOfMove(jj);
+    if (jj >= 0) { insertBeadsOfMove(jj); dInsertMove(jj); }
     if (tp === 3 || tp === 4) continue;
     const b1 = (i + 1) * 5;
     const X = P.cmd[b1], Z = P.cmd[b1 + 1], B = P.cmd[b1 + 2];
@@ -818,8 +923,6 @@ async function preflight(S, P, onProgress) {
     else if (Z < S.zMin - 1e-6 || Z > S.zMax + 1e-6) add('limit', i, `Z ${fmt(Z)} is outside ${S.zMin} to ${S.zMax} mm`);
     else if (B < S.bMin - 1e-6 || B > S.bMax + 1e-6) add('limit', i, `B ${fmt(B)}° is outside ${S.bMin}° to ${S.bMax}°`);
     const Xa = P.act[b1], Za = P.act[b1 + 1], Ba = P.act[b1 + 2], Ca = P.act[b1 + 3];
-    tipMachine(S, Xa, Za, Ba, tm);
-    const r = tm[0], y = tm[1], sb = tm[2], cb = tm[3];
     if (tp === 1 && P.dur[i] > 0 && P.act[b1 + 4] > P.act[b1 - 1]) {
       const b0 = i * 5;
       tipMachine(S, P.act[b0], P.act[b0 + 1], P.act[b0 + 2], tm); machineToBed(S, tm[0], tm[1], 0, P.act[b0 + 3], q);
@@ -849,26 +952,17 @@ async function preflight(S, P, onProgress) {
         if (want > 0 && tipV > want * 1.5) add('fast', i, `Nozzle crosses the bed ${(tipV / want).toFixed(1)}× faster than the F value asks`);
         else if (want > 0 && tipV < want * 0.5 && tipV > 0) add('slow', i, `Axis limits slow extrusion to ${(tipV / want).toFixed(2)}× the F value`);
       }
-      tipMachine(S, Xa, Za, Ba, tm);
     }
-    if (y < -0.05) { machineToBed(S, r, y, 0, Ca, q); add('bed', i, 'Nozzle tip goes below the bed surface', q); continue; }
-    let flagged = false;
-    for (const t of shaftTs) {
-      const x = r - t * sb, yy = y + t * cb;
-      machineToBed(S, x, yy, 0, Ca, q);
-      if (yy < 0 && Math.hypot(q[0], q[2]) < bedR) { add('bed', i, 'Nozzle shaft hits the bed', q); flagged = true; break; }
-      if (hit(q[0], q[1], q[2], rShaft)) { add('part', i, 'Nozzle may hit printed plastic', q); flagged = true; break; }
+    // The head is checked along the move's real path (C, X, Z, B blended in joint space), not only where it ends:
+    // a big turn of C or B can swing the nozzle through the part between two G-code points.
+    const b0 = i * 5;
+    const nS = headSamples(b0, b1);
+    for (let k = 1; k <= nS; k++) {
+      const f = k / nS, A = P.act;
+      if (headHits(i, A[b0] + (A[b1] - A[b0]) * f, A[b0 + 1] + (A[b1 + 1] - A[b0 + 1]) * f, A[b0 + 2] + (A[b1 + 2] - A[b0 + 2]) * f, A[b0 + 3] + (A[b1 + 3] - A[b0 + 3]) * f)) break;
     }
-    if (flagged) continue;
-    outer: for (const t of bodyTs) {
-      const cx = r - t * sb, cy = y + t * cb;
-      for (let k = 0; k < ringN; k++) {
-        const x = cx + S.bodyR * ringC[k] * cb, yy = cy + S.bodyR * ringC[k] * sb, z = S.bodyR * ringS[k];
-        machineToBed(S, x, yy, z, Ca, q);
-        if (yy < 0 && Math.hypot(q[0], q[2]) < bedR) { add('bed', i, 'Heater block hits the bed', q); break outer; }
-        if (hit(q[0], q[1], q[2], rBody)) { add('part', i, 'Heater block may hit printed plastic', q); break outer; }
-      }
-    }
+    // Travel: the tip itself must not pass through plastic already laid
+    if (P.beadStart[i + 1] === P.beadStart[i] && tp !== 2) tipDrag(i, b0, b1);
   }
   return issues;
 }
@@ -1384,7 +1478,7 @@ function buildBeadMesh() {
 function buildMarkers() {
   invalidate();
   if (markerMesh) { bedGroup.remove(markerMesh); if (markerMesh.dispose) markerMesh.dispose(); markerMesh = null; }
-  const pri = { stray: 0, blob: 1, part: 2, bed: 3, float: 4 };
+  const pri = { stray: 0, blob: 1, part: 2, drag: 2, bed: 3, float: 4 };
   const pts = issues.filter(x => x.pos && x.kind in pri).sort((a, b) => pri[a.kind] - pri[b.kind]).slice(0, 1500);
   if (!pts.length) return;
   markerMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1.4, 10, 8), new THREE.MeshBasicMaterial({ color: '#ffffff' }), pts.length);
@@ -1745,7 +1839,7 @@ $('#resume').addEventListener('click', () => { manual.active = false; });
 
 // ---------- preflight ----------
 let lastSupport = null, issueFilter = null, issueShown = 200;
-const KIND = { flow: ['Over hotend flow', 'warn'], over: ['Over-extrusion', 'info'], under: ['Under-extrusion', 'info'], stray: ['Stray pieces', 'err'], blob: ['Mid-air prime', 'warn'], float: ['Floating plastic', 'err'], part: ['Possible collision', 'err'], bed: ['Hits bed', 'err'], limit: ['Past axis limit', 'warn'], fast: ['Faster than F', 'warn'], slow: ['Slowed by axis limits', 'info'] };
+const KIND = { flow: ['Over hotend flow', 'warn'], over: ['Over-extrusion', 'info'], under: ['Under-extrusion', 'info'], stray: ['Stray pieces', 'err'], blob: ['Mid-air prime', 'warn'], float: ['Floating plastic', 'err'], part: ['Possible collision', 'err'], drag: ['Travel through plastic', 'err'], bed: ['Hits bed', 'err'], limit: ['Past axis limit', 'warn'], fast: ['Faster than F', 'warn'], slow: ['Slowed by axis limits', 'info'] };
 $('#runcheck').addEventListener('click', async () => {
   if (!P) { toast('Open a G-code file first.'); return; }
   setPlaying(false);
