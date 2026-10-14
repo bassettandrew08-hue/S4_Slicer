@@ -33,14 +33,12 @@ REGIONS = {"pi 3mm": {"bridge_underside": ((-5, 5), (-5.5, 5.5), (9.5, 12.5))}}
 # along_axis and zigzag are computed in measure()
 METRICS = ("ungrounded_mm", "ungrounded_wall_mm", "island_wall_mm", "cantilever_wall_mm", "island_mm",
            "cantilever_mm", "bridge_mm", "poles", "along_axis", "tilt_deg", "zigzag", "estimated_print_time_min",
-           "outside_mm", "surface_rough_pct", "asym_mm", "layer_asym_mm",  # tools/shape_metrics.py
-           "waviness")  # tools/roughness_breakdown.py
+           "outside_mm", "surface_rough_pct", "asym_mm", "waviness")  # outside..asym: tools/shape_metrics.py
 
 # metric: (worse when, tolerance before it counts as a regression)
 # structure is judged on walls/skin; sparse infill floats a little even in a flat print (it is still reported)
 CHECKS = {"ungrounded_mm": ("up_rel", 0.5), "ungrounded_wall_mm": ("up", 1.0), "island_wall_mm": ("up", 0.5),
-          "cantilever_wall_mm": ("up", 2.0), "poles": ("up", 0), "along_axis": ("up", 0), "zigzag": ("up_rel", 0.10),
-          "waviness": ("up_rel", 0.10),
+          "cantilever_wall_mm": ("up", 2.0), "poles": ("up", 0), "along_axis": ("up", 0), "zigzag": ("up_rel", 0.10), "waviness": ("up_rel", 0.10),
           "tilt_deg": ("down", 2.0)}
 
 
@@ -83,8 +81,7 @@ def measure(model, gc, log=None, seconds=None):
     res = {k: computed[k] if k in computed else num(k) for k in METRICS}
     p0, p1 = quality.bead_segments(gc, num("NOZZLE_OFFSET", 42.0))
     res.update(shape_metrics.measure(model, os.path.join(HERE, "input_models", f"{model}.stl"), r["mid"],
-                                     np.linalg.norm(p1 - p0, axis=1), r["rough"],
-                                     work_dir=os.path.join(os.path.dirname(gc), model)))
+                                     np.linalg.norm(p1 - p0, axis=1), r["rough"]))
     res.update(target_tilt_deg=num("deform.target_tilt_deg"), segments=r["segments"],
                seconds=round(seconds, 1) if seconds else None)
     # waviness: joints turning > 10 deg where the planar path runs straight (tools/roughness_breakdown.py); needs the

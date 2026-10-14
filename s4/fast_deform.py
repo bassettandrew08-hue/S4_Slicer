@@ -447,43 +447,19 @@ def next_iteration_mesh(ctx, new_vertices):
 LAST_DEFORM_INFO = None  # diagnostics of the most recent island_free deformation (for the G-code header)
 
 
-def deformation_step(tet, rf, p, last=True, verbose=0, log=print, post_fit=None):
-    """Rotation field -> deformed vertices, with the method chosen in the profile. post_fit (V -> V, the symmetry
-    average): island_free applies it between its fit and the lift, the notebook method at the end."""
+def deformation_step(tet, rf, p, last=True, verbose=0, log=print):
+    """Rotation field -> deformed vertices, with the method chosen in the profile."""
     global LAST_DEFORM_INFO
     method = p.get("DEFORMATION_METHOD", "island_free")
     LAST_DEFORM_INFO = None
     if method == "notebook":
-        nv = calculate_deformation(tet, rf, p["DEFORMATION_ITERATIONS"], verbose)
-        return nv if post_fit is None else post_fit(nv)
+        return calculate_deformation(tet, rf, p["DEFORMATION_ITERATIONS"], verbose)
     if method == "island_free":
         from . import island_free
         nv, LAST_DEFORM_INFO = island_free.deform(tet.points, tet.field_data["cells"],
-                                                  np.asarray(tet.cell_data["cell_center"]), rf, p, lift=last, log=log,
-                                                  post_fit=post_fit)
+                                                  np.asarray(tet.cell_data["cell_center"]), rf, p, lift=last, log=log)
         return nv
     raise ValueError(f"unknown DEFORMATION_METHOD {method!r} (use 'island_free' or 'notebook')")
-
-
-def _recount(ctx, V, p):
-    """Folds and floating islands of the deformed vertices after the symmetry step (into LAST_DEFORM_INFO)."""
-    from . import island_free
-    P0 = np.asarray(ctx.tet.points)
-    c = ctx.cells
-    J = np.stack([V[c[:, k]] - V[c[:, 0]] for k in (1, 2, 3)], axis=2)
-    J0 = np.stack([P0[c[:, k]] - P0[c[:, 0]] for k in (1, 2, 3)], axis=2)
-    inv = int(((np.linalg.det(J) * np.sign(np.linalg.det(J0))) <= 0).sum())
-    nbrs = island_free.vertex_graph(c, len(V))
-    bed = np.nonzero(P0[:, 2] <= P0[:, 2].min() + float(p.get("BED_TOL", 0.3)))[0].astype(np.int64)
-    seeds = island_free.island_seeds(V, nbrs, bed=island_free._grounded(V, bed, tol=1.0))
-    h = island_free.priority_flood(V, nbrs, float(p.get("ISLAND_LIFT_SLOPE", 0.5)), bed_tol=0.5,
-                                   bed=island_free._grounded(V, bed))
-    info = {"symmetry_inverted_tets": inv, "symmetry_island_seeds": len(seeds),
-            "symmetry_pit_vertices": int(((h - V[:, 2]) > 0.02).sum())}
-    print(f"[symmetry] after averaging: {info}", flush=True)
-    global LAST_DEFORM_INFO
-    if LAST_DEFORM_INFO is not None:
-        LAST_DEFORM_INFO = {**LAST_DEFORM_INFO, **info}
 
 
 def deform(model_path, params=None, verbose=0):
@@ -493,27 +469,12 @@ def deform(model_path, params=None, verbose=0):
     with TIMER("mesh setup"):
         ctx = prepare_mesh(model_path, part_offset, iterations[0]["SURFACE_SIMPLIFY_ERROR"])
     tet = ctx.tet
-    sym = None
-    if iterations[-1].get("SYMMETRY_PLANE") is not None:
-        from .symmetry import Mirror
-        with TIMER("symmetry: mirror plane"):
-            sym = Mirror(ctx.tet, ctx.cells, iterations[-1]["SYMMETRY_PLANE"], iterations[-1]["SYMMETRY_TOLERANCE"])
-        sym = sym if sym.ok else None
     for it, p in enumerate(iterations):
         tag = f" [iteration {it + 1}/{len(iterations)}]" if len(iterations) > 1 else ""
         with TIMER("optimize_rotations" + tag):
             rf = optimize_rotations(ctx, tet, p, verbose)
-        if sym is not None and p["SYMMETRY_MODE"] in ("field", "both"):
-            rf = sym.field(rf)
-        post = None
-        if sym is not None and p["SYMMETRY_MODE"] in ("vertices", "both") and it == len(iterations) - 1:
-            post = sym.vertices
         with TIMER("calculate_deformation" + tag):
-            nv = deformation_step(tet, rf, p, last=(it == len(iterations) - 1), verbose=verbose, post_fit=post)
-        if post is not None:
-            _recount(ctx, nv, p)
-        if sym is not None and p["SYMMETRY_MODE"] not in ("field", "vertices", "both"):
-            raise ValueError(f"unknown SYMMETRY_MODE {p['SYMMETRY_MODE']!r} (use 'field', 'vertices' or 'both')")
+            nv = deformation_step(tet, rf, p, last=(it == len(iterations) - 1), verbose=verbose)
         if it < len(iterations) - 1:
             with TIMER("attributes for next iteration"):
                 tet = next_iteration_mesh(ctx, nv)
