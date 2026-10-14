@@ -106,6 +106,7 @@ details > .body { padding-bottom: 14px; }
 #scrub { flex: 1; min-width: 80px; accent-color: var(--accent); height: 4px; }
 #moveinfo { font-family: var(--mono); font-size: 11.5px; color: var(--faint); min-width: 150px; text-align: right; }
 .transport select { padding: 4px 6px; }
+.transport .btn { flex: none; }
 
 /* readouts */
 .readout { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; font-size: 12.5px; }
@@ -184,7 +185,7 @@ details.inner > summary::after { order: -1; margin: 0 2px 0 0; }
   #legend { width: 210px; }
   #inspect { width: calc(100% - 24px); bottom: auto; top: 50px; }
 }
-@media (max-width: 560px) { .top [data-demo], .brand b { display: none; } .transport { gap: 4px; padding: 0 8px; } }
+@media (max-width: 560px) { .top [data-demo], .brand b, #restart { display: none; } .transport { gap: 4px; padding: 0 8px; } .transport .t { min-width: 0; } #scrub { min-width: 40px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
@@ -807,14 +808,16 @@ async function preflight(S, P, onProgress) {
   for (let t = S.ignoreTip; t < S.bodyStart; t += 2) shaftTs.push(t);
   const bodyTs = [S.bodyStart, S.bodyStart + S.bodyLen];
   const fmt = v => (Math.round(v * 100) / 100).toString();
-  // number of poses checked along a move: one per 5 deg of C or B, or 4 mm of tip travel (at least the end pose)
-  const ta = [0, 0, 0], tb2 = [0, 0, 0];
+  // Number of poses checked along a move: one per 5 deg of C or B, or 4 mm of tip travel (at least the end pose).
+  // The tip's path is a curve, so its length is estimated from the turns (the chord of a full C turn is zero):
+  // C swings the tip at its radius, B swings it at the nozzle offset, X and Z move it straight.
+  let pathEst = 0;
   const headSamples = (b0, b1) => {
-    const A = P.act;
-    tipMachine(S, A[b0], A[b0 + 1], A[b0 + 2], tm); machineToBed(S, tm[0], tm[1], 0, A[b0 + 3], ta);
-    tipMachine(S, A[b1], A[b1 + 1], A[b1 + 2], tm); machineToBed(S, tm[0], tm[1], 0, A[b1 + 3], tb2);
-    const chord = Math.hypot(tb2[0] - ta[0], tb2[1] - ta[1], tb2[2] - ta[2]);
-    return Math.min(16, Math.max(1, Math.ceil(Math.abs(A[b1 + 3] - A[b0 + 3]) / 5), Math.ceil(Math.abs(A[b1 + 2] - A[b0 + 2]) / 5), Math.ceil(chord / 4)));
+    const A = P.act, dCd = Math.abs(A[b1 + 3] - A[b0 + 3]), dBd = Math.abs(A[b1 + 2] - A[b0 + 2]);
+    tipMachine(S, A[b0], A[b0 + 1], A[b0 + 2], tm); const r0 = Math.abs(tm[0]);
+    tipMachine(S, A[b1], A[b1 + 1], A[b1 + 2], tm); const r1 = Math.abs(tm[0]);
+    pathEst = rad(dCd) * Math.max(r0, r1) + rad(dBd) * S.nozzleOffset + Math.hypot(A[b1] - A[b0], A[b1 + 1] - A[b0 + 1]);
+    return Math.min(128, Math.max(1, Math.ceil(dCd / 5), Math.ceil(dBd / 5), Math.ceil(pathEst / 4)));
   };
   // nozzle tip, shaft and heater block against the bed and earlier plastic, at one pose; true if it flagged something
   const headHits = (i, Xa, Za, Ba, Ca) => {
@@ -838,10 +841,14 @@ async function preflight(S, P, onProgress) {
     }
     return false;
   };
-  // Tip drag: a line through the lower part of each earlier bead (0.75 layer below the tip path, along the nozzle), in
-  // a 1 mm grid. A travel whose tip comes within 0.3 layer of it is about half a layer deep in the bead: it ploughs
-  // through it. Skimming the top (combing over the layer, landing on the layer below, wiping) stays clear.
-  const dragR = 0.3 * S.layerH, dHalf = 0.75 * S.layerH, dHash = new Map();
+  // Tip drag: a line through the lower part of each earlier bead (0.75 of its thickness below the tip path, along the
+  // nozzle), in a 1 mm grid. A travel whose tip comes within 0.3 of the thickness of it is about half a bead deep: it
+  // ploughs through it. Skimming the top (combing over the layer, landing on the layer below, wiping) stays clear.
+  // The thickness is the one drawn (beadDims); round beads and a bare P use the nominal layer height.
+  const nomH = P.layerNom || Math.max(0.05, S.layerH);
+  const beadT = sg => (P.beadH && S.beadShape !== 'round' ? P.beadH[sg] : nomH);
+  let hMax = nomH; if (P.beadH && S.beadShape !== 'round') for (let sg = 0; sg < P.beadTotal; sg++) if (P.beadH[sg] > hMax) hMax = P.beadH[sg];
+  const dragR = 0.3 * Math.min(hMax, 2), dHash = new Map();
   const dKey = (ix, iy, iz) => ((ix + 8192) * 16384 + (iy + 8192)) * 16384 + (iz + 8192);
   // offset from a bead's tip path to its lower line: along the nozzle axis made square to the path (as the bead is
   // drawn); null when the path runs along the nozzle, where "below" means nothing
@@ -852,6 +859,7 @@ async function preflight(S, P, onProgress) {
     const nx = P.segN[n3], ny = P.segN[n3 + 1], nz = P.segN[n3 + 2], dt = (nx * ux + ny * uy + nz * uz) / L;
     const hx = nx - dt * ux / L, hy = ny - dt * uy / L, hz = nz - dt * uz / L, hl = Math.hypot(hx, hy, hz);
     if (hl < 0.2) return null;
+    const dHalf = 0.75 * beadT(sg);
     dO[0] = hx / hl * dHalf; dO[1] = hy / hl * dHalf; dO[2] = hz / hl * dHalf; return dO;
   };
   const dInsertMove = j => {
@@ -890,10 +898,10 @@ async function preflight(S, P, onProgress) {
     const A = P.act;
     let moved = false; for (let k = 0; k < 4; k++) if (A[b1 + k] !== A[b0 + k]) moved = true;
     if (!moved || !dHash.size) return;
-    const nS = Math.min(400, Math.max(headSamples(b0, b1), Math.ceil(Math.hypot(tb2[0] - ta[0], tb2[1] - ta[1], tb2[2] - ta[2]) / 0.5)));
+    const nS = Math.min(2000, Math.max(headSamples(b0, b1), Math.ceil(pathEst / 0.5)));
     const at = (f, out) => { tipMachine(S, A[b0] + (A[b1] - A[b0]) * f, A[b0 + 1] + (A[b1 + 1] - A[b0 + 1]) * f, A[b0 + 2] + (A[b1 + 2] - A[b0 + 2]) * f, tm); return machineToBed(S, tm[0], tm[1], 0, A[b0 + 3] + (A[b1 + 3] - A[b0 + 3]) * f, out); };
     at(0, p0);
-    const R = dragR + 0.3, r2 = dragR * dragR;
+    const R = dragR + 0.3;
     for (let k = 1; k <= nS; k++) {
       at(k / nS, p1);
       const x0 = Math.floor(Math.min(p0[0], p1[0]) - R), x1 = Math.floor(Math.max(p0[0], p1[0]) + R);
@@ -902,8 +910,8 @@ async function preflight(S, P, onProgress) {
       for (let ix = x0; ix <= x1; ix++) for (let iy = y0; iy <= y1; iy++) for (let iz = z0; iz <= z1; iz++) {
         const arr = dHash.get(dKey(ix, iy, iz)); if (!arr) continue;
         for (const sg of arr) {
-          const off = dOff(sg), o = sg * 6, ox = off[0], oy = off[1], oz = off[2];
-          if (segSeg2(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], P.seg[o] + ox, P.seg[o + 1] + oy, P.seg[o + 2] + oz, P.seg[o + 3] + ox, P.seg[o + 4] + oy, P.seg[o + 5] + oz) < r2) {
+          const off = dOff(sg), o = sg * 6, ox = off[0], oy = off[1], oz = off[2], rr = 0.3 * beadT(sg);
+          if (segSeg2(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], P.seg[o] + ox, P.seg[o + 1] + oy, P.seg[o + 2] + oz, P.seg[o + 3] + ox, P.seg[o + 4] + oy, P.seg[o + 5] + oz) < rr * rr) {
             add('drag', i, 'Nozzle tip moves through printed plastic while travelling', [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2]);
             return;
           }
@@ -918,7 +926,8 @@ async function preflight(S, P, onProgress) {
     iCur = i;
     const tp = P.type[i];
     const jj = i - S.ignoreRecent;
-    if (jj >= 0) { insertBeadsOfMove(jj); dInsertMove(jj); }
+    if (jj >= 0) insertBeadsOfMove(jj);
+    if (i > 0) dInsertMove(i - 1); // the drag check sees every bead laid before this move
     if (tp === 3 || tp === 4) continue;
     const b1 = (i + 1) * 5;
     const X = P.cmd[b1], Z = P.cmd[b1 + 1], B = P.cmd[b1 + 2];
@@ -1255,7 +1264,7 @@ const vp = $('#viewport');
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setClearColor(0x000000, 0);
-renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap; // PCF honours shadow.radius (PCFSoft does not)
 vp.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(38, 1, 0.5, 5000);
@@ -1281,7 +1290,7 @@ keyLight.shadow.mapSize.set(2048, 2048);
 keyLight.shadow.bias = -0.0004; keyLight.shadow.normalBias = 0.25; keyLight.shadow.radius = 3;
 const rimLight = new THREE.DirectionalLight(0x9cc4ff, 0.3); rimLight.position.set(-320, 220, -280); scene.add(rimLight);
 function fitShadow() { // the shadow camera covers the bed and the head's reach
-  const R = Math.max(S.bedDiameter / 2, S.xMax) + 40, c = keyLight.shadow.camera;
+  const R = Math.max(S.bedDiameter / 2, S.xMax) + 75, c = keyLight.shadow.camera; // reaches past the column
   c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.near = 100; c.far = 1400; c.updateProjectionMatrix();
 }
 // Floor shadow lives outside the rotating root, and is round, so "hold the bed still" never makes it spin
@@ -1299,7 +1308,16 @@ const matLive = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.
 let sceneDirty = true; const invalidate = () => { sceneDirty = true; };
 const PREVIEW_MOVES = 400, PREVIEW_VERTS = PREVIEW_MOVES * 2 * 16;
 
+const SHARED = new Set([matFrame, matAlu, matPrinted, matBlock, matBrass, matBead, matLive]);
+function disposeTree(obj) { // free the GPU buffers of machine parts that are rebuilt (shared materials and beadGeo stay)
+  obj.traverse(o => {
+    if (o === beadMesh || o === markerMesh || o === travelLines || o === retractPts) return;
+    if (o.geometry && o.geometry !== beadGeo) o.geometry.dispose();
+    for (const m of [].concat(o.material || [])) if (!SHARED.has(m)) m.dispose();
+  });
+}
 function buildMachine() {
+  disposeTree(root);
   root.clear();
   fitShadow();
   const bedR = S.bedDiameter / 2, L = S.nozzleOffset;
@@ -1412,22 +1430,39 @@ function updateLegend() {
 }
 // Bead cross-section of every segment. 'flow': as thick as a layer, measured along the nozzle axis, and as wide as
 // the plastic the E value pushes fills (Cura's model: a rectangle with round sides, A = (w - h) h + pi h^2 / 4).
-// A bead on the bed is as thick as the gap under the tip. Primes and blobs keep the nominal size.
+// A bead on the first layer is as thick as the gap under the tip, measured along the nozzle. Primes and blobs keep the
+// nominal size.
 function beadLayerHeights() {
   const I = slicerInfo();
   const lh = parseFloat(I.header['Layer height']) || parseFloat(I.cura.layer_height);
-  const nom = S.beadHeight > 0 ? S.beadHeight : (lh > 0 ? lh : S.layerH);
+  const nom = Math.max(0.05, S.beadHeight > 0 ? S.beadHeight : (lh > 0 ? lh : S.layerH)); // never a zero-thickness bead
   const l0 = parseFloat(I.cura.layer_height_0);
   return { nom, first: l0 > 0 ? Math.max(l0, nom) : nom };
+}
+// Gap between the tip and the bed along the nozzle for bead segment s (Infinity when the nozzle is nearly sideways).
+function bedGap(s) {
+  const ny = Math.abs(P.segN[s * 3 + 1]);
+  return ny < 0.3 ? Infinity : Math.min(P.seg[s * 6 + 1], P.seg[s * 6 + 4]) / ny;
 }
 function beadDims() {
   const n = P.beadTotal, bw = new Float32Array(n), bh = new Float32Array(n);
   const { nom, first } = beadLayerHeights(), wMax = 4 * S.beadWidth;
+  // The first layer's real height, from the first beads printed (a deformed S4 first layer is often thinner than
+  // layer_height_0, and uneven). The first layer ends at the first bead clearly two layers up; before that, beads whose
+  // gap to the bed is under the first layer's height plus half a layer lie on the bed.
+  const gaps = [];
+  for (let s = 0; s < n && gaps.length < 500; s++) if (!P.segPrime[s] && isFinite(bedGap(s))) gaps.push(bedGap(s));
+  gaps.sort((a, b) => a - b);
+  const h1 = Math.min(Math.max(gaps.length ? gaps[gaps.length >> 1] : first, 0.4 * nom), Math.max(first, 2 * nom));
+  const onBed = h1 + 0.5 * nom;
+  let firstEnd = n;
+  for (let s = 0; s < n; s++) { const g = bedGap(s); if (!P.segPrime[s] && g > h1 + 1.5 * nom && isFinite(g)) { firstEnd = s; break; } }
+  P.layerNom = nom;
   for (let s = 0; s < n; s++) {
     if (S.beadShape === 'round') { bw[s] = bh[s] = S.beadWidth; continue; }
-    const A = P.segArea[s], tipY = Math.min(P.seg[s * 6 + 1], P.seg[s * 6 + 4]);
+    const A = P.segArea[s], gap = s < firstEnd ? bedGap(s) : Infinity;
     let h = nom;
-    if (tipY < first * 1.15) h = Math.min(first, Math.max(0.4 * nom, tipY)); // on the bed: fills the gap under the tip
+    if (gap < onBed) h = Math.max(0.4 * nom, gap); // on the bed: fills the gap under the tip
     if (P.segPrime[s] || !(A > 0) || !isFinite(A)) { bw[s] = S.beadWidth; bh[s] = h; continue; }
     if (A < Math.PI * h * h / 4) { bw[s] = bh[s] = 2 * Math.sqrt(A / Math.PI); continue; } // too little plastic to fill a layer: a thin round thread
     bw[s] = Math.min(wMax, A / h + h * (1 - Math.PI / 4)); bh[s] = h;
@@ -1480,7 +1515,7 @@ function buildBeadMesh() {
 }
 function buildMarkers() {
   invalidate();
-  if (markerMesh) { bedGroup.remove(markerMesh); if (markerMesh.dispose) markerMesh.dispose(); markerMesh = null; }
+  if (markerMesh) { bedGroup.remove(markerMesh); markerMesh.geometry.dispose(); markerMesh.material.dispose(); if (markerMesh.dispose) markerMesh.dispose(); markerMesh = null; }
   const pri = { stray: 0, blob: 1, part: 2, drag: 2, bed: 3, float: 4 };
   const pts = issues.filter(x => x.pos && x.kind in pri).sort((a, b) => pri[a.kind] - pri[b.kind]).slice(0, 1500);
   if (!pts.length) return;
@@ -1585,7 +1620,7 @@ function updatePreview(i) {
 // is pulled back (retract) or pushed in without the tip moving (prime / unretract). Shown up to the current move.
 const TRAVEL_MAX_VERTS = 6000000;
 function buildTravelLayer() {
-  for (const o of [travelLines, retractPts]) if (o) { bedGroup.remove(o); o.geometry.dispose(); }
+  for (const o of [travelLines, retractPts]) if (o) { bedGroup.remove(o); o.geometry.dispose(); o.material.dispose(); }
   travelLines = retractPts = null;
   const n = P.n, a = P.act, tStart = new Int32Array(n + 1), rStart = new Int32Array(n + 1);
   let nv = 0, nr = 0;
@@ -2108,10 +2143,10 @@ function renderSlicer() {
     ['Primes / unretracts', M.primeCount ? `${fmt(M.prime, 2)} mm · ${M.primeCount.toLocaleString()}×` : 'None'],
     ['Print speed (asked)', isFinite(M.printSpeed) ? fmt(M.printSpeed, 0) + ' mm/s typical' : '—'],
     ['Travel speed (asked)', isFinite(M.travelSpeed) ? fmt(M.travelSpeed, 0) + ' mm/s typical' : '—'],
-    ['Bead size', P.flowMedian ? `${fmt(P.flowMedian, 3)} mm² · ≈${fmt(P.flowMedian / (parseFloat(I.header['Layer height']) || S.layerH), 2)} mm wide` : '—'],
+    ['Bead size', P.flowMedian ? (() => { const h = beadLayerHeights().nom; return `${fmt(P.flowMedian, 3)} mm² · ≈${fmt(P.flowMedian / h + h * (1 - Math.PI / 4), 2)} mm wide, ${fmt(h, 2)} thick`; })() : '—'],
   ];
   h += `<h3 class="sub">Measured from the moves</h3><div class="readout">${rows.map(r => `<div class="rk">${r[0]}</div><div class="rv wrap">${r[1]}</div><div></div>`).join('')}</div>
-    <p class="faint">Speeds are what the G-code asks for, as the typical (median) value. The bead width assumes ${I.header['Layer height'] ? 'the layer height from the header' : `the ${S.layerH} mm layer height in Settings`}.</p>`;
+    <p class="faint">Speeds are what the G-code asks for, as the typical (median) value. The bead size uses ${S.beadHeight > 0 ? 'the bead thickness in Settings' : I.header['Layer height'] ? 'the layer height from the header' : `the ${S.layerH} mm layer height in Settings`}, as the beads in the view do.</p>`;
   box.innerHTML = h;
   const cs = $('#copyspec');
   if (cs) cs.addEventListener('click', async () => {

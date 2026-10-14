@@ -30,8 +30,8 @@ demo** shows a sample cup.
   X + sin(B)·L, Z + (1 − cos(B))·L from the G-code values (L = nozzle offset), the same as `s4/geometry.py`.
 - **Beads shaped by the plastic.** Each bead is as thick as a layer, measured along the nozzle, and as wide as the
   E value fills (Cura's bead model: a rectangle with round sides). It hangs below the tip, so the tip rides on its top
-  face. The thickness is the file's layer height (or **Bead thickness** in Settings); a bead on the bed is as thick as
-  the gap under the tip. Primes keep the nominal width. **Bead shape: Round** gives the old fixed-width tubes. Click a
+  face. The thickness is the file's layer height (or **Bead thickness** in Settings); a first-layer bead is as thick
+  as the gap between the tip and the bed, along the nozzle. Primes keep the nominal width. **Bead shape: Round** gives the old fixed-width tubes. Click a
   bead to see its width and thickness.
 - **The bead being laid** grows up to the nozzle tip while the move plays.
 - **Travel and retractions** (View panel, off by default): every move that lays no plastic, up to the current move,
@@ -52,11 +52,11 @@ bridge underside). The same measure, as a count, is in `tools/model_suite.py`.
 
 **Run preflight check** looks at the whole file: axis limits, speed, hotend flow, over- and under-extrusion, primes in
 mid-air, floating plastic, and the nozzle against the bed and the printed part. The nozzle, its shaft and the heater
-block are checked at several poses along each move (every 5° of C or B, or 4 mm of tip travel), not only where the
-move ends, because a big turn can swing the head through the part between two G-code points. **Travel through
-plastic** flags a move that lays no plastic while its tip goes about half a layer deep into a bead printed earlier
-(skimming the top of the layer, as combing does, is not flagged). It uses the support-check layer height in Settings,
-so set that to the file's layer height (the File panel offers it).
+block are checked at several poses along each move (every 5° of C or B, or 4 mm of tip travel along its curved path,
+up to 128 poses), not only where the move ends, because a big turn can swing the head through the part between two
+G-code points. **Travel through plastic** flags a move that lays no plastic while its tip goes about half a bead deep
+into any bead printed before it (skimming the top of the layer, as combing does, is not flagged). The bead thickness
+is the one drawn in the view, so nothing needs setting.
 
 ## Settings are remembered
 
