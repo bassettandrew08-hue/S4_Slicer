@@ -1,8 +1,8 @@
 {
-  "description": "Smoother hull exterior (CHANGELOG 2026-10-14, hull): more tilt (MAX_OVERHANG 20) leaves a smaller pit over the cabin for the island lift to fill, and a gentler, softer-edged lift (ISLAND_LIFT_SLOPE 0.2, LIFT_HOLD_FALLOFF 5) puts fewer crossing layer lines into the hull. Hull layer_turns 538 -> 411; ungrounded walls 21.9 -> 1.8 mm, island walls 10.5 -> 2.6 mm, cantilever walls 1.0 -> 6.9 mm; about 10 min longer.",
+  "description": "Hull exterior as in the no-lift print, without its islands (CHANGELOG 2026-10-14, band lift v2): the built-in rotation field (MAX_OVERHANG 30, so the hull's layer lines are the no-lift ones: deformed heights identical more than 1.5 mm from the pits), and the pits over the bulwark rims filled with the band lift (LIFT_MODE band: the layer lines around continued across the pit, no closed rings) at a gentle slope (ISLAND_LIFT_SLOPE 0.1). Vs the built-in defaults: hull layer_turns 538 -> 386 (no lift 384); hull-side islands gone. Left: a ~12-22 mm top-skin patch over sparse infill at the stern (part frame x 23, z 42), in every MAX_OVERHANG 30 print including no lift; MAX_OVERHANG 25 shrinks it to 2.5 mm but changes the whole hull's field.",
   "deform": {
-    "MAX_OVERHANG": 20,
-    "ISLAND_LIFT_SLOPE": 0.2,
-    "LIFT_HOLD_FALLOFF": 5
+    "LIFT_MODE": "band",
+    "ISLAND_LIFT_SLOPE": 0.1,
+    "LIFT_BAND_MARGIN": 1
   }
 }

@@ -82,7 +82,9 @@ two steps:
 - **lifting:** vertices that can't be reached from the bed by a path rising at least `ISLAND_LIFT_SLOPE` per mm get
   height targets, and the fit is solved again. Those regions then print later, growing out from where they're
   attached. How the lift holds the rest of the part still is described in the
-  [CHANGELOG](../CHANGELOG.md#2026-10-01-smoother-lifted-surfaces-six-model-quality-suite).
+  [CHANGELOG](../CHANGELOG.md#2026-10-01-smoother-lifted-surfaces-six-model-quality-suite). `LIFT_MODE: band`
+  (opt-in; the benchy profile) fills a pit with the layer field around it instead of the flood level, so the layer
+  lines cross the patch as bands instead of rings ([CHANGELOG](../CHANGELOG.md#2026-10-14-band-lift-hull-layer-bands-without-islands-lift_mode-band)).
 
 - **pit-free field** (opt-in, `PIT_FREE_ROUNDS` > 0, between the two): the one step that changes the notebook's tilt
   field. The fit's height is, to first order, h = K^-1 b(theta) (K the mesh stiffness, b the per-tet target

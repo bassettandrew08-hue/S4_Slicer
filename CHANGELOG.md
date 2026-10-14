@@ -7,6 +7,7 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 
 **Entries**
 - [2026-10-14: Pit-free tilt field (opt-in)](#2026-10-14-pit-free-tilt-field-opt-in)
+- [2026-10-14: Band lift: hull layer bands without islands (LIFT_MODE band)](#2026-10-14-band-lift-hull-layer-bands-without-islands-lift_mode-band)
 - [2026-10-14: Faster pipeline, same output; denser meshes (TET_MAX_VOLUME)](#2026-10-14-faster-pipeline-same-output-denser-meshes-tet_max_volume)
 - [2026-10-14: The benchy's choppy hull; mesh density setting](#2026-10-14-the-benchys-choppy-hull-mesh-density-setting)
 - [2026-10-14: Where the path roughness comes from; opt-in smoother mapping](#2026-10-14-where-the-path-roughness-comes-from-opt-in-smoother-mapping)
@@ -85,6 +86,102 @@ x2, print-time parity).
 | `PIT_FREE_SLOPE` 0.13 (full run) | island / cantilever walls 11.9 / 9.6 mm, ungrounded walls 24.6 mm, `layer_turns` 408 |
 
 The code for these is not kept.
+
+---
+
+## 2026-10-14: Band lift: hull layer bands without islands (LIFT_MODE band)
+
+### Diagnosis
+Drawn as contours on the hull side (scratch render of the deformed z on the surface triangles), the fit alone
+(no lift, `MAX_OVERHANG` 30) gives open, concentric half-rings centred on the gunwale; the pit is the gunwale and
+deck around it. The rings of the earlier runs have two separate causes:
+- the flood lift at `ISLAND_LIFT_SLOPE` 0.5: the flood level is a cone grown from grounded vertices (largely the
+  ones under the skin), and where its fronts meet on the skin it makes a peak: closed rings. Imposed directly as a
+  height field (no solve), the cone alone already takes hull `layer_turns` 384 -> 470; at slope 0.2 / 0.1 only
+  394 / 381.
+- the benchy hull profile's `MAX_OVERHANG` 20: its rotation field has the rings by itself (fit only, no lift: 410,
+  rings at the same spot as with the profile's lift, 411).
+The rest is the solve: one-sided targets on the pit and a weak, ramped hold next to it leave the patch's
+neighbours half-dragged (wandering lines: slope 0.1 targets 381, solved 398-407).
+
+### Added
+- **`LIFT_MODE`** (deform, default `flood` = unchanged): `band` fills each pit, plus `LIFT_BAND_MARGIN` mm around it,
+  with two-sided targets: on the outer surface the harmonic interpolation, over the surface triangles, of the
+  heights on the patch's rim (1/length^2 weights: discrete maximum principle, so no new extrema on the surface, no
+  closed rings), inside the part the flood level; then flooded again at `ISLAND_LIFT_SLOPE` so nothing is left
+  unreachable. Recomputed every round from the current shape. Tried first and dropped: a trend plane plus a
+  harmonic residual over the 3-D pit (the pit is the skin, so the vertices under it set the fill: 477-786).
+- **`LIFT_BAND_MARGIN`** (default 0).
+
+### Changed
+- **`params/benchy upsidedown tilted.json`** (v1, replaced by v2 below): `MAX_OVERHANG` 25, `LIFT_MODE` band, `ISLAND_LIFT_SLOPE` 0.16,
+  `LIFT_BAND_MARGIN` 1 (replaces the hull profile's 20 / 0.2 / `LIFT_HOLD_FALLOFF` 5). The low slope keeps the
+  filled patch from becoming a cone; 0.16 is ~0.8 mm of new overhang per 0.13 mm layer, inside the support
+  check's 1 mm. `MAX_OVERHANG` 25 removes most of an unsupported skin at the stern (part frame x 23, z 42, layer
+  ~388, 22 mm in every `MAX_OVERHANG` 30 run with or without lift; the vertex flood does not see it).
+
+| benchy | built-in defaults | no lift | hull profile (before) | band profile v1 |
+|---|---|---|---|---|
+| hull `layer_turns` | 538 | 384 | 411 | 390 |
+| ungrounded walls | 21.9 mm | 1789 mm | 1.8 mm | 2.9 mm |
+| island / cantilever walls | 10.5 / 1.0 mm | 38 / 11.5 mm | 2.6 / 6.9 mm | 4.6 / 9.8 mm |
+| zigzag / waviness | 4632 / 671 | 4668 / 112 | 3937 / 185 | 4325 / 219 |
+| tilt | 49.4 deg | 48.0 deg | 56.5 deg | 52.2 deg |
+| print time | 151.3 min | 145.9 min | 160.7 min | 152.1 min |
+
+R-Theta Sim (hold the bed still, hull side): open arcs over the whole hull on both sides, like the no-lift run;
+the hull profile's closed rings in the middle of the side are gone. Left: a few slightly faceted lines along the
+gunwale where the patch was filled.
+
+Other variants (hull `layer_turns`, deform only, same rotation field):
+
+| change | layer_turns | |
+|---|---|---|
+| flood lift, slope 0.1, `LIFT_HOLD_FALLOFF` 5 (`MAX_OVERHANG` 30) | 398 | ungrounded walls 23.5 mm (the stern skin), hull side clean |
+| band, slope 0.1, margin 1 (`MAX_OVERHANG` 30) | 386 | ungrounded walls 13.9 mm (11.8 the stern skin) |
+| band at `MAX_OVERHANG` 25: slope 0.13 / 0.16 / 0.2 | 389 / 390 / 398 | slope 0.1: cantilever walls 18.1 mm on the hull side |
+| band at slope 0.16: `MAX_OVERHANG` 22 / 23 | 409 / 399 | the rotation field's rings come back |
+| band at slope 0.5 | 549 | the reflood is the cone again |
+| flood lift at `MAX_OVERHANG` 25, slope 0.16 | 402 | |
+
+### v2: the no-lift field outside the pits (`params/benchy upsidedown tilted.json` now)
+The first band profile's `MAX_OVERHANG` 25 changes the rotation field, so the whole hull differed from the no-lift
+print (deformed height on the hull surface off by 0.43 mm on average, up to 2.5 mm, even far from the pits). The
+profile is now `LIFT_MODE` band, `ISLAND_LIFT_SLOPE` 0.1, `LIFT_BAND_MARGIN` 1 with the built-in `MAX_OVERHANG` 30.
+Deformed height on the visible hull vs no lift (same mesh; regions by path distance from the slope-0.5 pit of the
+no-lift fit, 921 of the hull's 8705 surface vertices):
+
+| region | pit | 0-1.5 mm | 1.5-3 mm | 3-6 mm | rest |
+|---|---|---|---|---|---|
+| v2: mean / max abs. height change | 0.53 / 3.85 mm | 0.01 / 0.25 | 0.001 / 0.10 | 0 / 0.01 | 0 / 0 |
+| v1 (`MAX_OVERHANG` 25) | 1.22 / 5.0 | 0.70 / 3.07 | 0.65 / 2.93 | 0.52 / 2.86 | 0.43 / 2.5 |
+| layer_turns: no lift / v2 / v1 | 80.3 / 82.6 / 86.5 | 15.2 / 15.4 / 16.9 | 42.6 / 42.8 / 43.8 | 74.7 / 74.6 / 75.2 | 171.0 / 171.0 / 167.6 |
+
+(The lift solve also moves vertices in x and y, mostly a rigid shift; layer lines depend only on the heights.)
+
+| benchy | no lift | v1 | v2 |
+|---|---|---|---|
+| hull `layer_turns` | 384 | 390 | 386.5 |
+| ungrounded / island / cantilever walls | 1789 / 38 / 11.5 mm | 2.9 / 4.6 / 9.8 mm | 22.4 / 11.4 / 3.0 mm |
+| of it on the hull sides | ~1870 mm | ~1 mm | < 1 mm |
+| tilt, print time | 48.0 deg, 145.9 min | 52.2 deg, 152.1 min | 48.5 deg, 143.2 min |
+
+Nearly all of v2's ungrounded and island walls (21.8 mm, layers 388-390) are one spot at the stern (part frame
+x 23, z 42), the same in the no-lift print and in every `MAX_OVERHANG` 30 run: a top-surface dimple, so its first
+top-skin layer starts as a ~2 mm patch over sparse infill (gyroid lines 2.2 mm away, no wall nearby) and the
+support check finds nothing within 1 mm. It is not a pit of the shape (no vertex below its flood level). Cura's
+`top_skin_preshrink` 2.5 removes the patch but the walls around the dimple then float instead; `gradual_infill_steps`
+1 makes it much worse (520 mm); `skin_support` has no effect. Only more tilt (`MAX_OVERHANG` 25 or 20) avoids it.
+
+What stays: a strip along the bulwark rim (the pit, up to ~3 mm from the edge) prints as wide terraces. The
+rim is a lip that hangs below the deck in the print; the lift has to raise its tip up to 3.3 mm, to the level
+where the deck drains, so that strip is nearly level with the layers and each layer steps out ~1.3 mm. Tried
+for it (target fields on the fit, hull `layer_turns`): an uphill taper of the lift (max slope 0.3 or 0.15 mm/mm,
+smoothed): 391-394, lifts 1900-3500 vertices, closed rings on one side; slope 0.05: 380, but the hull-side walls
+float again (ungrounded walls 27.4 mm); slope 0.13: 393, larger lake.
+
+Not a default: with `LIFT_MODE` band, slope 0.16 on all six models, pi 3mm's bridge underside gets rougher (zigzag
+195 -> 263, `bridge_underside` 22 -> 67); Squirtle, dino, z mount and B axis mount are ok vs the baseline.
 
 ---
 

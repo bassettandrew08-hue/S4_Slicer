@@ -79,6 +79,8 @@ are in the [CHANGELOG](../CHANGELOG.md#2026-10-14-pit-free-tilt-field-opt-in).
 | `PRECOND_FLOOR` | 0 | solver stiffness floor for the fit (× the median) |
 | `ISLAND_LIFT_SLOPE` | 0.5 | every point must be reachable from the bed rising at least this much per mm. Higher = stricter (1.0 ≈ 45° overhangs) but more distortion |
 | `ISLAND_LIFT_ROUNDS` | 5 | rounds of lifting |
+| `LIFT_MODE` | flood | what a pit is filled with. `flood`: the flood level, a cone rising at `ISLAND_LIFT_SLOPE` from the pit's outlet (on a wall the layer lines close into rings around the patch). `band`: the layer heights on the patch's rim interpolated across it (harmonic over the surface triangles, no new extrema), held two-sided, so the layer lines run through as bands. Use `band` with a low `ISLAND_LIFT_SLOPE` (~0.15); at 0.5 the flood cone comes back |
+| `LIFT_BAND_MARGIN` | 0 | `band` only: mm (path length) around the pits that are re-shaped too, for a smooth transition |
 | `LIFT_ITERATIONS` | 100 | solver iterations per lifting round |
 | `LIFT_WEIGHT` | 50 | strength of the lift targets against the fold penalty. Raise it together with `FOLD_PENALTY` |
 | `LIFT_ANCHOR` | 1 | while lifting, the grounded vertices stay where the fit put them (0 = off) |

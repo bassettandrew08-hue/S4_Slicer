@@ -20,6 +20,11 @@ islands. This module replaces only that step; the rotation field is still the no
    isn't in a pit is held at its fit-only height (LIFT_HOLD), so only the pits move: an unanchored lift mostly moved
    the whole part up, and its stale targets pulled vertices back down (creases). The lift solves use their own
    preconditioner floor (LIFT_PRECOND_FLOOR) so vertices held only by micro-tets don't take huge steps.
+   LIFT_MODE "band" (opt-in) fills the pits differently: the flood level is a cone around the pit's outlet, so on a
+   wall the layer lines close into rings around the lifted patch. "band" instead gives the pit (and a margin of
+   LIFT_BAND_MARGIN mm) two-sided targets whose surface heights are the harmonic interpolation of the heights on the
+   patch's rim (band_fill): no new extrema on the surface, so the layer lines run through the patch as bands. It
+   is meant for a low ISLAND_LIFT_SLOPE (~0.15): a steep slope forces the cone back in.
 
 Opt-in (PIT_FREE_ROUNDS > 0), between 1 and 2: pit_free_field changes the rotation field itself where the fit
 leaves pits, until there are none (the one place the notebook's field is changed; off by default).
@@ -39,7 +44,7 @@ from .params import DEFAULT_PARAMS
 
 # the deform settings this module reads; defaults, order and their explanations are in s4/params.py
 _KEYS = (
-    "ISLAND_LIFT_SLOPE", "ISLAND_LIFT_ROUNDS", "LIFT_WEIGHT", "LIFT_ANCHOR", "LIFT_ONE_SIDED", "LIFT_HOLD",
+    "ISLAND_LIFT_SLOPE", "ISLAND_LIFT_ROUNDS", "LIFT_MODE", "LIFT_BAND_MARGIN", "LIFT_WEIGHT", "LIFT_ANCHOR", "LIFT_ONE_SIDED", "LIFT_HOLD",
     "LIFT_HOLD_FALLOFF", "LIFT_PRECOND_FLOOR", "BARRIER_WEIGHT", "FLIP_FREE_STAGES", "FLIP_FREE_STAGE_ITERATIONS",
     "FIT_METHOD", "FOLD_PENALTY", "FOLD_PENALTY_DET", "PENALTY_ITERATIONS", "LIFT_ITERATIONS", "BED_PIN_WEIGHT",
     "BED_TOL", "SLIVER_QUALITY", "MICRO_TET_VOLUME", "PRECOND_FLOOR",
@@ -235,6 +240,63 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
     return rf, R, V, info
 
 
+def _edge_graph(P, nbrs):
+    """Sparse symmetric graph of the mesh edges weighted by their length in P."""
+    from scipy.sparse import csr_matrix
+    a = np.repeat(np.arange(len(nbrs)), [len(x) for x in nbrs])
+    b = np.concatenate([np.asarray(x, np.int64) for x in nbrs])
+    return csr_matrix((np.linalg.norm(P[a] - P[b], axis=1) + 1e-9, (a, b)), shape=(len(nbrs), len(nbrs)))
+
+
+def surface_edges(cells):
+    """Edges of the tet mesh's boundary triangles."""
+    c = np.asarray(cells)
+    fs = np.sort(np.vstack([c[:, [0, 1, 2]], c[:, [0, 1, 3]], c[:, [0, 2, 3]], c[:, [1, 2, 3]]]), axis=1)
+    u, cnt = np.unique(fs, axis=0, return_counts=True)
+    sf = u[cnt == 1]
+    return np.unique(np.sort(np.vstack([sf[:, [0, 1]], sf[:, [1, 2]], sf[:, [0, 2]]]), axis=1), axis=0)
+
+
+def harmonic_fill(z, region, P, edges):
+    """z with the region's values replaced by the harmonic interpolation (1/length^2 edge weights over `edges`, which
+    obey the discrete maximum principle: no minima or maxima inside) of z on the region's boundary."""
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.linalg import spsolve
+    n = len(z)
+    a, b = edges[:, 0], edges[:, 1]
+    keep = region[a] | region[b]
+    a, b = a[keep], b[keep]
+    w = 1.0 / np.maximum(np.linalg.norm(P[a] - P[b], axis=1), 1e-6) ** 2
+    W = csr_matrix((np.r_[w, w], (np.r_[a, b], np.r_[b, a])), shape=(n, n))
+    D = np.nonzero(region & (np.asarray(W.sum(1)).ravel() > 0))[0]
+    f = z.copy()
+    if not len(D):
+        return f
+    Wd = W[D]
+    L = csr_matrix((np.asarray(Wd.sum(1)).ravel(), (np.arange(len(D)), np.arange(len(D)))),
+                   shape=(len(D), len(D))) - Wd[:, D]
+    out = np.ones(n, bool)
+    out[D] = False
+    f[D] = spsolve(L.tocsc(), Wd[:, out] @ z[out])
+    return f
+
+
+def band_fill(P0, V, nbrs, sedges, region, h, slope, bed):
+    """LIFT_MODE "band": heights for the vertices of `region` (bool: the pits and a margin around them) whose layer
+    lines continue the ones around them instead of closing into rings. On the outer surface: the harmonic
+    interpolation, over the surface triangles, of the heights on the region's rim (no new extrema on the surface, so
+    no closed rings); inside the part: the flood level h. The result is flooded again at `slope` from the bed, so
+    anything still unreachable rises to the flood level. Returns the full height field (V's z outside the region)."""
+    z = V[:, 2]
+    on_s = np.zeros(len(z), bool)
+    on_s[sedges.ravel()] = True
+    f = np.where(region, np.maximum(z, h), z)
+    f = np.where(region & on_s, harmonic_fill(z, region & on_s, P0, sedges), f)
+    Vf = V.copy()
+    Vf[:, 2] = f
+    return np.maximum(f, priority_flood(Vf, nbrs, slope, bed_tol=0.5, bed=bed))
+
+
 def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     """Fold-free fit of the rotation field, then island lifting. Returns (new vertex positions, info dict)."""
     q = {**DEFAULTS, **{k: p[k] for k in DEFAULTS if k in p}}
@@ -300,15 +362,38 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
             held[anchor[0]] = False
         if pin is not None:
             held[pin[0]] = False
+        band = q["LIFT_MODE"] == "band"
+        if q["LIFT_MODE"] not in ("flood", "band"):
+            raise ValueError(f"unknown LIFT_MODE {q['LIFT_MODE']!r} (use 'flood' or 'band')")
+        if band:
+            G0 = _edge_graph(P0, nbrs)
+            sedges = surface_edges(cells)
+            pit_all = np.zeros(len(P0), bool)
         for _ in range(int(q["ISLAND_LIFT_ROUNDS"])):
-            h = priority_flood(V, nbrs, float(q["ISLAND_LIFT_SLOPE"]), bed_tol=0.5,
-                               bed=_grounded(V, bed))
+            g = _grounded(V, bed)
+            h = priority_flood(V, nbrs, float(q["ISLAND_LIFT_SLOPE"]), bed_tol=0.5, bed=g)
             need = (h - V[:, 2]) > 0.02
             if not need.any():
                 break
-            tgt = np.maximum(tgt, np.where(need, h, -np.inf))
-            idx = np.nonzero(np.isfinite(tgt))[0].astype(np.int64)
-            targets = (idx, tgt[idx], w[idx], np.full(len(idx), bool(q["LIFT_ONE_SIDED"])))
+            if band:
+                from scipy.sparse.csgraph import dijkstra
+                pit_all |= need
+                region = pit_all.copy()
+                if float(q["LIFT_BAND_MARGIN"]) > 0:
+                    d = dijkstra(G0, directed=False, indices=np.nonzero(pit_all)[0], min_only=True,
+                                 limit=float(q["LIFT_BAND_MARGIN"]))
+                    region |= np.isfinite(d)
+                if anchor is not None:
+                    region[anchor[0]] = False
+                f = band_fill(P0, V, nbrs, sedges, region, h, float(q["ISLAND_LIFT_SLOPE"]), g)
+                two = region.copy()
+                up = ~region & (f > V[:, 2] + 0.02)
+                idx = np.nonzero(two | up)[0].astype(np.int64)
+                targets = (idx, f[idx], w[idx], up[idx] & bool(q["LIFT_ONE_SIDED"]))
+            else:
+                tgt = np.maximum(tgt, np.where(need, h, -np.inf))
+                idx = np.nonzero(np.isfinite(tgt))[0].astype(np.int64)
+                targets = (idx, tgt[idx], w[idx], np.full(len(idx), bool(q["LIFT_ONE_SIDED"])))
             hold = None
             if float(q["LIFT_HOLD"]) > 0:
                 hold = _hold_targets(V_fit, nbrs, idx, held, hold_w, float(q["LIFT_HOLD_FALLOFF"]))

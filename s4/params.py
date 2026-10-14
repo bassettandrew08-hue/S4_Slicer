@@ -36,6 +36,12 @@ DEFAULT_PARAMS = dict(
     ISLAND_LIFT_SLOPE=0.5,         # mm of rise per mm from the bed; 0.5 ~ overhangs up to ~63 deg from vertical
                                    # in deformed space
     ISLAND_LIFT_ROUNDS=5,
+    LIFT_MODE="flood",             # what a pit is filled with: "flood" = the flood level (a cone rising at
+                                   # ISLAND_LIFT_SLOPE from the rim: closed layer rings on a wall); "band" = the
+                                   # surrounding layer field continued across it (trend plane + harmonic residual,
+                                   # island_free.band_fill), so layer lines run through as bands
+    LIFT_BAND_MARGIN=0.0,          # mm: "band" re-shapes this much (path length) around the pits too, for a smooth
+                                   # transition
     LIFT_WEIGHT=50.0,
     # Lifting holds the part's grounded vertices (anchor) and everything that is not in a pit (hold) where the fit
     # put them, and only pushes the pits up (one-sided). The old, unanchored lift is LIFT_ANCHOR=0,
