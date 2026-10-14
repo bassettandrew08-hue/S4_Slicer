@@ -31,8 +31,8 @@ axis model w markers2 are byte-identical to before (same planar G-code; all but 
 - **Mesh setup:** the cell graph's edge lengths in one row-wise norm (the per-edge loop of 1-D norms took 13 s on
   the benchy); networkx's graph and `multi_source_dijkstra` replaced by a numba replay of the same search (heap
   order by distance then push count, networkx's neighbour order, the same additions), so distances, closest bottom
-  cells and the in-air test are identical. Benchy 15.6 -> 6.7 s, axis model 23 -> 10 s.
-- **Support check** (34 -> 3 s on the benchy, 82 -> 5.5 s on the axis model): reuses the deform's tet mesh (no
+  cells and the in-air test are identical. Benchy 6.0 -> 1.9 s, axis model 7.8 -> 2.9 s.
+- **Support check** (9.8 -> 1.0 s on the benchy, 23.8 -> 1.8 s on the axis model): reuses the deform's tet mesh (no
   second TetGen run) and the mapper's parse and mapping of the planar points (the same numbers); layers and types
   from the parse's line numbers; the "anything printed earlier within 1 mm" queries on one static numba hash grid
   instead of KD-trees rebuilt every layer (same distance test, same answers on all four models); the distance to the
@@ -42,11 +42,11 @@ axis model w markers2 are byte-identical to before (same planar G-code; all but 
 - **Poles check and print-time estimate** run in a worker process while the support check runs (`S4_NO_WORKER=1`
   runs them in-process). The end of the run is timed now too (`poles + print-time estimate`, `settings header`).
 - **`TET_MAX_VOLUME`** (deform, default null = TetGen's default mesh, unchanged): largest tet volume in mm^3, for
-  denser meshes. Benchy: 0.3 -> 102k tets (3.1x), deform 220 s (rotation field 105 s, deformation 93 s, about
-  linear in the tet count). The header says `tetrahedralize = fixedvolume, maxvolume ...` when it is set.
+  denser meshes. Benchy: 0.3 -> 102k tets (3.1x), deform 97.5 s instead of 23.3 s (rotation field 48.6 s,
+  deformation 40.7 s: a little more than in proportion). The header says `tetrahedralize = fixedvolume, maxvolume ...` when it is set.
 
-Whole runs (same planar G-code): dino 77 -> 48 s, B axis mount 112 -> 82 s, benchy 164 -> 123 s, axis model
-292 -> 197 s. Per stage: [DEVELOPING.md](docs/DEVELOPING.md#where-the-time-goes). Not faster yet: the rotation-field
+Whole runs (same planar G-code, back to back on an idle PC): dino 25.9 -> 16.5 s, B axis mount 38.8 -> 27.3 s,
+benchy 53.3 -> 36.8 s, axis model 90.1 -> 61.3 s. Per stage: [DEVELOPING.md](docs/DEVELOPING.md#where-the-time-goes). Not faster yet: the rotation-field
 least squares and the `island_free` solve, now most of the time. A numba port of scipy's LSMR (bit-identical, it
 calls numpy's own BLAS dot) was tried and dropped: the time is in OpenBLAS's threaded dot products (~0.5 ms each
 here) and the sparse mat-vecs, not in Python, so it saved nothing.

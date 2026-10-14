@@ -106,27 +106,28 @@ Cura's planar toolpath, to separate the shape's problems from the mapping's.
 ## Where the time goes
 
 Every run writes `build/<model>/timings_fast.json` (the stage tree, `s4/timing.py`); the log ends with the same
-tree. Seconds per stage with the same planar G-code (`--sliced-gcode`, no CuraEngine), default settings, before and
-after the 2026-10-14 speed-ups (on a 24-thread PC that was not idle, so expect ±15 % noise):
+tree. Seconds per stage with the same planar G-code (`--sliced-gcode`, no CuraEngine), default settings, before
+(c348a0c) and after the 2026-10-14 speed-ups, run back to back on an otherwise idle 24-thread PC (the same PC under
+load from other jobs is up to 3x slower):
 
 | stage | dino (4k tets) | B axis mount 5mm (21k) | benchy upsidedown tilted (33k) | axis model w markers2 (50k) |
 |---|---|---|---|---|
-| mesh setup | 1.5 -> 1.4 | 9.1 -> 4.0 | 15.6 -> 6.7 | 23.0 -> 10.1 |
-| rotation field (TRF least squares) | 7.2 | 20.6 | 36.0 | 38.3 |
-| deformation (`island_free` fit + lift) | 0.7 | 14.0 | 31.7 | 64.4 |
-| map, incl. axis speed limits | 20.0 -> 18.7 | 21.8 -> 20.4 | 26.6 -> 22.9 | 49.4 -> 43.9 |
-| support check | 31.1 -> 2.8 | 28.4 -> 2.9 | 34.0 -> 3.2 | 82.1 -> 5.5 |
-| poles + print-time estimate, after the support check | 6.3 -> 8.5 | 6.8 -> 8.6 | 7.9 -> 12.1 | 12.0 -> 20.3 |
-| whole run | 77 -> 48 | 112 -> 82 | 164 -> 123 | 292\* -> 197 |
+| mesh setup | 0.5 -> 0.4 | 2.9 -> 1.5 | 6.0 -> 1.9 | 7.8 -> 2.9 |
+| rotation field (TRF least squares) | 2.6 | 6.8 | 12.1 | 12.9 |
+| deformation (`island_free` fit + lift) | 0.2 | 5.1 | 10.1 | 19.6 |
+| map, incl. axis speed limits | 6.8 | 8.0 | 8.8 -> 7.9 | 15.8 -> 14.7 |
+| support check | 9.8 -> 1.1 | 10.2 -> 1.2 | 9.8 -> 1.0 | 23.8 -> 1.8 |
+| poles + print-time estimate, after the support check | 3.2 | 2.6 -> 3.4 | 2.7 -> 3.3 | 5.6 -> 6.6 |
+| whole run | 25.9 -> 16.5 | 38.8 -> 27.3 | 53.3 -> 36.8 | 90.1 -> 61.3 |
 
-(\* the run with CuraEngine; the `--sliced-gcode` one took 992 s, 12 minutes of it in a then untimed step at the end
-(poles check or settings header, now timed) that did not recur. The rows without an arrow did not change. The poles check and the print-time estimate now run in a worker process
-during the support check; the row is the wait after it.) What is left is mostly the two solvers: the rotation field
-(scipy's TRF with LSMR; its time goes into sparse mat-vecs and OpenBLAS dot products, not Python) and the
-`island_free` L-BFGS. Both scale about linearly with the tet count: the benchy at `TET_MAX_VOLUME` 0.3 (102k tets,
-3.1x) took 107 s for the rotation field and 93 s for the deformation (3.1x and 2.9x), mesh setup 20 s (13 s of it the
-neighbour lists, still Python sets). The map, the support check and the print-time estimate scale with the G-code
-(points), not with the mesh.
+(Rows without an arrow: unchanged within the noise. The poles check and the print-time estimate now run in a worker
+process during the support check; that row is the wait after it, and before it left out the untimed poles check.)
+What is left is mostly the two solvers: the rotation field (scipy's TRF with LSMR; its time goes into sparse
+mat-vecs and OpenBLAS's threaded dot products, not Python) and the `island_free` L-BFGS. Denser meshes
+(`TET_MAX_VOLUME`) cost a little more than in proportion: the benchy at 0.3 mm^3 has 102k tets (3.1x) and its deform
+took 97.5 s instead of 23.3 s (4.2x): rotation field 48.6 s (4.4x), deformation 40.7 s (4.3x), mesh setup 7.6 s
+(5.2 s of it the neighbour lists, still Python sets; before the speed-ups mesh setup was 25.6 s there). The map,
+the support check and the print-time estimate scale with the G-code (points), not with the mesh.
 
 **Speed-ups must not change a byte** (rule 1 and 3). What is safe: per-element work in parallel (each tet, row or
 query point computed on its own, in the same operation order), vectorising a loop with the same float operations
