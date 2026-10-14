@@ -1,0 +1,8 @@
+{
+  "description": "Smoother hull exterior (CHANGELOG 2026-10-14, hull): more tilt (MAX_OVERHANG 20) leaves a smaller pit over the cabin for the island lift to fill, and a gentler, softer-edged lift (ISLAND_LIFT_SLOPE 0.2, LIFT_HOLD_FALLOFF 5) puts fewer crossing layer lines into the hull. Hull layer_turns 538 -> 411; ungrounded walls 21.9 -> 1.8 mm, island walls 10.5 -> 2.6 mm, cantilever walls 1.0 -> 6.9 mm; about 10 min longer.",
+  "deform": {
+    "MAX_OVERHANG": 20,
+    "ISLAND_LIFT_SLOPE": 0.2,
+    "LIFT_HOLD_FALLOFF": 5
+  }
+}

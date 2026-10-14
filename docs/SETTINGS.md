@@ -67,8 +67,6 @@ from it.
 | `LIFT_ONE_SIDED` | true | only the pits are pushed up; earlier lift targets never pull a vertex back down |
 | `LIFT_HOLD` | 0.2 | every vertex that isn't in a pit is held where the fit put it, with this fraction of `LIFT_WEIGHT` (0 = off) |
 | `LIFT_HOLD_FALLOFF` | 0 | mm over which the hold ramps up with distance from a pit (fewer creases, but costs support on some models) |
-| `LIFT_REFIT` | 0 (off) | > 0: after the lift, the extra rotation it gave each tet (smoothed over `LIFT_REFIT_RADIUS` mm) is added to that tet's target rotation, the part is fitted again and lifted again; repeated this many times. Turns part of the lift into tilt, which a plain fit draws without creases. Changes Byrd's targets (not the field itself); about 50 s per pass on the benchy |
-| `LIFT_REFIT_RADIUS` | 3 | mm, `LIFT_REFIT` only |
 | `LIFT_PRECOND_FLOOR` | 0.3 | solver stiffness floor for the lift solves only (`-1` = use `PRECOND_FLOOR`) |
 | `BED_TOL` | 0.3 | mm; vertices this close to the lowest point count as the bed face, which is always supported |
 | `BED_PIN_WEIGHT` | 0 | > 0 also holds the bed face flat on the bed. Off by default: it costs tilt and support |
