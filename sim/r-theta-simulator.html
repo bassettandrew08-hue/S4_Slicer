@@ -1287,7 +1287,7 @@ scene.add(new THREE.HemisphereLight(0xe9eef4, 0x151a20, 0.45));
 const keyLight = new THREE.DirectionalLight(0xfff4e6, 0.75); keyLight.position.set(220, 520, 260); scene.add(keyLight);
 keyLight.castShadow = true;
 keyLight.shadow.mapSize.set(2048, 2048);
-keyLight.shadow.bias = -0.0004; keyLight.shadow.normalBias = 0.25; keyLight.shadow.radius = 3;
+keyLight.shadow.bias = -0.001; keyLight.shadow.normalBias = 1; keyLight.shadow.radius = 3; // beads are thinner than a shadow texel: a 1 mm normal offset keeps them from speckling with self-shadow
 const rimLight = new THREE.DirectionalLight(0x9cc4ff, 0.3); rimLight.position.set(-320, 220, -280); scene.add(rimLight);
 function fitShadow() { // the shadow camera covers the bed and the head's reach
   const R = Math.max(S.bedDiameter / 2, S.xMax) + 75, c = keyLight.shadow.camera; // reaches past the column
@@ -1305,6 +1305,35 @@ const matBlock = new THREE.MeshStandardMaterial({ color: '#d4d8dd', metalness: 0
 const matBrass = new THREE.MeshStandardMaterial({ color: '#e0ad55', metalness: 1, roughness: 0.22 });
 const matBead = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.48, metalness: 0, envMapIntensity: 0.7 });
 const matLive = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.48, metalness: 0, envMapIntensity: 0.7 });
+// Beads thinner than a few pixels on screen alias: each bead's round cross-section shades light on top and dark at the
+// sides, and sampling those sub-pixel stripes makes moire swirls that look like surface defects. As a bead shrinks
+// below about 5 px of thickness its normal is blended toward the view direction within its cross-section (about the
+// average normal you see of it), so far beads shade smoothly and close ones keep their layer lines.
+const beadPx = { value: 1 }; // pixels per (mm of bead thickness / mm of view depth); set in resize()
+function smoothFarBeads(shader) {
+  shader.uniforms.beadPxScale = beadPx;
+  shader.vertexShader = 'uniform float beadPxScale;\n' + shader.vertexShader.replace('#include <defaultnormal_vertex>', `#include <defaultnormal_vertex>
+  {
+    #ifdef USE_INSTANCING
+      mat4 bm = modelViewMatrix * instanceMatrix;
+    #else
+      mat4 bm = modelViewMatrix;
+    #endif
+    vec3 ax = mat3(bm) * vec3(1.0, 0.0, 0.0); // thickness axis, scaled: bead thickness = |ax| * 2 cos 30
+    vec3 ay = normalize(mat3(bm) * vec3(0.0, 1.0, 0.0)); // along the path
+    vec4 mvq = bm * vec4(position, 1.0);
+    float px = length(ax) * 1.7320508 * beadPxScale / max(1e-3, -mvq.z);
+    vec3 vw = normalize(-mvq.xyz);
+    // the view direction in the cross-section, pulled toward its nearer axis: a far wall shades like its side
+    // (stacked beads hide each other's tops), a far top skin like its top
+    vec3 xa = normalize(ax), za = normalize(mat3(bm) * vec3(0.0, 0.0, 1.0));
+    float ca = dot(vw, xa), cz = dot(vw, za);
+    vec3 vq = ca * abs(ca) * xa + cz * abs(cz) * za;
+    float kk = 1.0 - smoothstep(1.5, 5.0, px);
+    if (kk > 0.0 && dot(vq, vq) > 1e-6) transformedNormal = normalize(mix(normalize(transformedNormal), normalize(vq), kk));
+  }`);
+}
+matBead.onBeforeCompile = smoothFarBeads; matLive.onBeforeCompile = smoothFarBeads;
 let sceneDirty = true; const invalidate = () => { sceneDirty = true; };
 const PREVIEW_MOVES = 400, PREVIEW_VERTS = PREVIEW_MOVES * 2 * 16;
 
@@ -1557,6 +1586,7 @@ function placeCamera() {
 function resize() {
   const w = vp.clientWidth, h = vp.clientHeight;
   renderer.setSize(w, h); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix(); invalidate();
+  beadPx.value = renderer.getDrawingBufferSize(new THREE.Vector2()).y * 0.5 * camera.projectionMatrix.elements[5];
 }
 new ResizeObserver(resize).observe(vp);
 

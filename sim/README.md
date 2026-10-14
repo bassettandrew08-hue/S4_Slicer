@@ -34,6 +34,8 @@ demo** shows a sample cup.
   as the gap between the tip and the bed, along the nozzle. Primes keep the nominal width. **Bead shape: Round** gives the old fixed-width tubes. Click a
   bead to see its width and thickness.
 - **The bead being laid** grows up to the nozzle tip while the move plays.
+- Beads thinner than a few pixels on screen shade as a smooth surface, so a part seen whole shows no moiré swirls
+  (which would look like surface defects); zoom in and the layer lines appear.
 - **Travel and retractions** (View panel, off by default): every move that lays no plastic, up to the current move,
   with a red dot where filament is pulled back and a green dot where it is pushed in without the tip moving.
 - The view only redraws when something changes, so a large print costs nothing while it sits still. The part casts a
