@@ -1,0 +1,8 @@
+{
+  "description": "Band lift v2 (the benchy default before the lip rotation; use with --params): built-in field, pits filled with the band lift at slope 0.1. Hull identical to no-lift away from the pits, a terraced strip along the bulwark rim; hull layer_turns 386.5.",
+  "deform": {
+    "LIFT_MODE": "band",
+    "ISLAND_LIFT_SLOPE": 0.1,
+    "LIFT_BAND_MARGIN": 1
+  }
+}

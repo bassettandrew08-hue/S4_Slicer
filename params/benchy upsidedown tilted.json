@@ -1,8 +1,12 @@
 {
-  "description": "Hull exterior as in the no-lift print, without its islands (CHANGELOG 2026-10-14, band lift v2): the built-in rotation field (MAX_OVERHANG 30, so the hull's layer lines are the no-lift ones: deformed heights identical more than 1.5 mm from the pits), and the pits over the bulwark rims filled with the band lift (LIFT_MODE band: the layer lines around continued across the pit, no closed rings) at a gentle slope (ISLAND_LIFT_SLOPE 0.1). Vs the built-in defaults: hull layer_turns 538 -> 386 (no lift 384); hull-side islands gone. Left: a ~12-22 mm top-skin patch over sparse infill at the stern (part frame x 23, z 42), in every MAX_OVERHANG 30 print including no lift; MAX_OVERHANG 25 shrinks it to 2.5 mm but changes the whole hull's field.",
+  "description": "Benchy default (user's choice 2026-10-14): band lift v2 plus a local pit-free tilt field (lip rotation, CHANGELOG 2026-10-14). Within 8 mm of the pits over the bulwark lips the rotation field is changed (adjoint of the pit depth, outside held) until the lips print from the deck without lifting; the band lift then lifts 0 vertices. No islands; the rim edge is clean; a patch of closed rings on the hull side 3-8 mm above the rim; hull layer_turns 413. The band-lift-only version is params/benchy upsidedown tilted (band lift v2).json.",
   "deform": {
     "LIFT_MODE": "band",
     "ISLAND_LIFT_SLOPE": 0.1,
-    "LIFT_BAND_MARGIN": 1
+    "LIFT_BAND_MARGIN": 1,
+    "PIT_FREE_ROUNDS": 40,
+    "PIT_FREE_SLOPE": 0.1,
+    "PIT_FREE_REGION": 8,
+    "PIT_FREE_SMOOTH": 5
   }
 }
