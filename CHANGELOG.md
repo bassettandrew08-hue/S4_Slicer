@@ -6,6 +6,7 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 `benchy upsidedown tilted` (33,156 tets) and `pi 3mm` models with default settings, unless noted.
 
 **Entries**
+- [2026-10-14: Lip rotation: the bulwark lips by the tilt field (PIT_FREE_REGION)](#2026-10-14-lip-rotation-the-bulwark-lips-by-the-tilt-field-pit_free_region)
 - [2026-10-14: Pit-free tilt field (opt-in)](#2026-10-14-pit-free-tilt-field-opt-in)
 - [2026-10-14: Band lift: hull layer bands without islands (LIFT_MODE band)](#2026-10-14-band-lift-hull-layer-bands-without-islands-lift_mode-band)
 - [2026-10-14: Faster pipeline, same output; denser meshes (TET_MAX_VOLUME)](#2026-10-14-faster-pipeline-same-output-denser-meshes-tet_max_volume)
@@ -22,6 +23,57 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 - [2026-09-27: Island-free deformation](#2026-09-27-island-free-deformation)
 - [2026-09-26: Output fixes, build profiles, docs](#2026-09-26-output-fixes-build-profiles-docs)
 - [2026-09-25: Headless pipeline](#2026-09-25-headless-pipeline)
+
+---
+
+## 2026-10-14: Lip rotation: the bulwark lips by the tilt field (PIT_FREE_REGION)
+
+### Why
+With band lift v2 the hull matches the no-lift print except a strip along the bulwark rim, which prints as
+terraces: the pit's lowest points are the lip tips (part frame (-9.7, 13.5, 28.6) and (-1.7, -13.6, 34.5)), which hang
+below the deck, and the lift has to raise them 2-3 mm to where the deck drains, nearly level with the layers. Here
+the lips are rotated in the tilt field instead, only near them.
+
+### Added
+- **`PIT_FREE_REGION`** (mm, default 0 = anywhere): the pit-free field correction changes only the tets within this
+  path distance of the first fit's pits (full weight up to half of it, smoothstep to 0 at the edge, a tet takes its
+  vertices' smallest weight), and every vertex beyond it is held at the fit's height while the field changes
+  (z springs of weight **`PIT_FREE_HOLD`**, default 50; the adjoint uses the same held stiffness). Without the hold
+  a local change still moved the whole hull (0.17 mm on average far from the pits).
+- **`PIT_FREE_SEED_DEPTH`** (mm, default 0): the region grows only from pit vertices deeper than this.
+- **`params/benchy upsidedown tilted (lip rotation).json`**: band lift v2 plus `PIT_FREE_ROUNDS` 40,
+  `PIT_FREE_SLOPE` 0.1 (the band lift's slope), `PIT_FREE_REGION` 8, `PIT_FREE_SMOOTH` 5. The lift then lifts 0
+  vertices.
+
+### Benchy (v2 profile plus the settings shown; hull surface, regions by path distance from the no-lift fit's slope-0.5 pit, as in the band-lift entry)
+| | v2 (band lift) | region 3, smooth 1.5 | region 5, smooth 3 | **region 8, smooth 5 (profile)** | region 5, smooth 3, 8 rounds + band lift |
+|---|---|---|---|---|---|
+| lifted vertices / island seeds | 357 / 0 | 80 / 1 (0.5) | 0 / 0 | **0 / 0** | 145 / 0 |
+| hull `layer_turns` | 386.5 | 428.3 | 418.9 | **413.1** | 410.4 |
+| turns: pit / 0-1.5 / 1.5-3 / 3-6 / rest | 82.6 / 15.4 / 42.8 / 74.6 / 171.0 | 115.4 / 22.8 / 44.5 / 74.5 / 171.0 | 96.4 / 23.6 / 50.3 / 77.5 / 171.0 | **89.6 / 19.4 / 45.9 / 86.4 / 171.9** | 99.5 / 18.2 / 45.9 / 75.8 / 171.0 |
+| abs. height change vs no lift, mean / max (mm): pit | 0.73 / 3.85 | 1.20 / 4.77 | 1.59 / 5.00 | **2.07 / 5.59** | 1.25 / 4.37 |
+| 0-1.5 mm | 0.007 / 0.13 | 0.045 / 0.59 | 0.21 / 1.16 | **0.48 / 1.88** | 0.15 / 0.91 |
+| 1.5-3 mm | 0.002 / 0.10 | 0.008 / 0.24 | 0.08 / 0.81 | **0.25 / 1.38** | 0.05 / 0.60 |
+| 3-6 mm | 0 / 0.01 | 0 / 0.03 | 0.007 / 0.29 | **0.09 / 0.79** | 0.004 / 0.19 |
+| rest | 0 / 0 | 0 / 0 | 0 / 0 | **0.001 / 0.22** | 0 / 0 |
+| field change mean / max | | 1.7 / 202 deg | 2.1 / 139 deg | **3.2 / 111 deg** | 1.4 / 56 deg |
+| ungrounded / island / cantilever walls | 22.4 / 11.4 / 3.0 mm | 23.7 / 12.0 / 2.8 mm | 23.1 / 11.3 / 3.7 mm | **23.0 / 11.4 / 3.4 mm** | 24.6 / 13.2 / 8.8 mm |
+| print time | 143.2 min | 156.5 min | 155.1 min | **155.8 min** | 153.3 min |
+
+(Ungrounded walls: 22 mm of each is the stern top-skin spot, as in the no-lift print.) Deform time with the
+profile: 71 s (the correction 68 s, 24 rounds).
+
+R-Theta Sim (hold the bed still, height colours): the rim itself is clean in every rotated variant: no terraces,
+the lines run to the edge, and mid-print the lip grows out of the deck and hull with nothing in the air. But the field
+change raises the rim strip above the hull right next to it, and the hull side 3-8 mm above the rim gets a patch of
+closed rings (a valley along the rim, where the no-lift heights rise away from the gunwale). That patch is wider and
+stronger the smaller the region (region 3: rings and wandering loops right on the rim; region 8: one ring patch). It is
+a topological trade: the lip tip must end up above where the deck drains (2-3 mm above its no-lift height). If the
+heights a few mm away stay as in the no-lift print, the strip in between is either level (v2's terraces) or a
+valley (rings). Only a wider change (the whole field, e.g. `MAX_OVERHANG` 25) avoids both.
+
+Also tried: the region grown only from the lip tips (`PIT_FREE_SEED_DEPTH` 1, region 3): the correction stalls
+(pit depth 268 -> 72, fields up to 305 deg), `layer_turns` 462; a capped 5 deg step (region 3, smooth 3): 420.
 
 ---
 

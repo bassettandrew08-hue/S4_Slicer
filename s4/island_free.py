@@ -49,6 +49,7 @@ _KEYS = (
     "FIT_METHOD", "FOLD_PENALTY", "FOLD_PENALTY_DET", "PENALTY_ITERATIONS", "LIFT_ITERATIONS", "BED_PIN_WEIGHT",
     "BED_TOL", "SLIVER_QUALITY", "MICRO_TET_VOLUME", "PRECOND_FLOOR",
     "PIT_FREE_ROUNDS", "PIT_FREE_SLOPE", "PIT_FREE_MAX_STEP", "PIT_FREE_SMOOTH", "PIT_FREE_FRACTION",
+    "PIT_FREE_REGION", "PIT_FREE_HOLD", "PIT_FREE_SEED_DEPTH",
 )
 DEFAULTS = {k: DEFAULT_PARAMS[k] for k in _KEYS}
 
@@ -185,6 +186,8 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
          s = PIT_FREE_SMOOTH mm), back to the tets as the mean of their vertices;
       4. theta -= a u, a chosen so the linear model removes PIT_FREE_FRACTION of P, but no tet's angle changes by more
          than PIT_FREE_MAX_STEP deg; then the fit is solved again for the new field (solve(R) -> V).
+    With PIT_FREE_REGION > 0 the change is confined to a smooth mask around the first fit's pits and the vertices
+    beyond it are held at their heights (solve(R, hold)), so the rest of the part keeps its shape.
     Stops when no vertex is more than 0.02 mm deep in a pit. Returns (rotation field, R, V, info)."""
     from scipy.sparse import diags, identity
     from scipy.sparse.linalg import splu
@@ -193,7 +196,27 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
     Gi = prob.Dm_inv
     G = np.concatenate([-Gi.sum(axis=1, keepdims=True), Gi], axis=1)
     K = prob.K_raw
-    lu = splu((K + 1e-9 * np.median(K.diagonal()) * identity(n, format="csc")).tocsc())
+    slope = float(q["PIT_FREE_SLOPE"])
+    region_mm = float(q["PIT_FREE_REGION"])
+    mask = hold = None
+    wz = np.zeros(n)
+    if region_mm > 0:
+        # local change: only the tets within PIT_FREE_REGION mm (path length through the mesh) of the fit's pits may
+        # change, full weight up to half of that and smoothly down to 0 at the edge (a tet takes the smallest weight
+        # of its vertices); every vertex beyond the edge is held at its height (z spring, PIT_FREE_HOLD), so the
+        # rest of the part keeps the fit's shape. The adjoint uses the same held stiffness.
+        from scipy.sparse.csgraph import dijkstra
+        h0 = priority_flood(V, nbrs, slope, bed_tol=0.5, bed=_grounded(V, bed))
+        pit0 = np.nonzero(h0 - V[:, 2] > max(0.02, float(q["PIT_FREE_SEED_DEPTH"])))[0]
+        if len(pit0):
+            dist = dijkstra(_edge_graph(prob.P0, nbrs), directed=False, indices=pit0, min_only=True, limit=region_mm)
+            t = np.clip((region_mm - dist) / (0.5 * region_mm), 0.0, 1.0)
+            mask = (t * t * (3.0 - 2.0 * t))[cells].min(axis=1)
+            out = np.nonzero(~np.isfinite(dist))[0].astype(np.int64)
+            if float(q["PIT_FREE_HOLD"]) > 0:
+                hold = (out, V[out, 2].copy(), np.full(len(out), float(q["PIT_FREE_HOLD"])))
+                wz[out] = float(q["PIT_FREE_HOLD"])
+    lu = splu((K + diags(wz + 1e-9 * np.median(K.diagonal()))).tocsc())
     zt = np.cross(np.array([0.0, 0.0, 1.0]), tangential_vectors(cell_centers))
     s = float(q["PIT_FREE_SMOOTH"])
     smooth = None
@@ -202,7 +225,6 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
         np.add.at(Mv, cells.ravel(), np.repeat(prob.vol / 4, 4))
         smooth = splu((diags(Mv) + s * s * K).tocsc())
     rf = np.asarray(rotation_field, np.float64).copy()
-    slope = float(q["PIT_FREE_SLOPE"])
     rounds = int(q["PIT_FREE_ROUNDS"])
     R = rotation_matrices(cell_centers, rf)
     first = None
@@ -227,6 +249,8 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
             gv = np.zeros(n)
             np.add.at(gv, cells.ravel(), np.repeat(grad / 4, 4))
             u = smooth.solve(gv)[cells].mean(axis=1)
+        if mask is not None:
+            u = u * mask
         umax = float(np.abs(u).max())
         gu = float(grad @ u)
         if umax <= 0 or gu <= 0:
@@ -234,7 +258,7 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
         step = min(float(q["PIT_FREE_FRACTION"]) * depth / gu, np.radians(float(q["PIT_FREE_MAX_STEP"])) / umax)
         rf -= step * u
         R = rotation_matrices(cell_centers, rf)
-        V = solve(R)
+        V = solve(R, hold)
     info = {"pit_vertices_before": first[0], "pit_depth_before": round(first[1], 2), "pit_vertices": len(pit),
             "pit_depth": round(depth, 2), "pit_free_rounds": k}
     return rf, R, V, info
@@ -334,9 +358,11 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
             raise ValueError("PIT_FREE_ROUNDS needs FIT_METHOD 'penalty'")
         rf_in = np.asarray(rotation_field, np.float64)
 
-        def _solve(Rk):
+        def _solve(Rk, hold=None):
             nonlocal iters
-            Vk, it = prob.solve(Rk, prob.linear_start(Rk, pin), int(q["PENALTY_ITERATIONS"]), lift=pin)
+            tg = pin if hold is None else (hold if pin is None else tuple(np.concatenate([a, b])
+                                                                           for a, b in zip(pin, hold)))
+            Vk, it = prob.solve(Rk, prob.linear_start(Rk, tg), int(q["PENALTY_ITERATIONS"]), lift=tg)
             iters += it
             return Vk
         rotation_field, R, V, pit_info = pit_free_field(prob, cell_centers, rf_in, V, bed, nbrs, q, _solve)

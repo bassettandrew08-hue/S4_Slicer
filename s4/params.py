@@ -64,6 +64,12 @@ DEFAULT_PARAMS = dict(
     PIT_FREE_MAX_STEP=10.0,        # deg: largest change of any tet's angle per round
     PIT_FREE_SMOOTH=4.0,           # mm: length scale over which each round's correction is spread (smoothness)
     PIT_FREE_FRACTION=0.7,         # each round aims to remove this fraction of the total pit depth (linear model)
+    PIT_FREE_REGION=0.0,           # mm: > 0 changes the field only within this distance (path length through the mesh)
+                                   # of the pits the fit leaves, blended smoothly to nothing at the edge; 0 = anywhere
+    PIT_FREE_HOLD=50.0,            # with PIT_FREE_REGION: weight of the z springs that hold every vertex beyond the
+                                   # region at the fit's height while the field changes inside it
+    PIT_FREE_SEED_DEPTH=0.0,       # with PIT_FREE_REGION: the region grows only from pit vertices deeper than this
+                                   # (mm), e.g. a pit's lowest tip rather than all of it
     BARRIER_WEIGHT=0.02,         # barrier: beta, weight of the symmetric-Dirichlet fold barrier
     FLIP_FREE_STAGES=10,           # barrier: the target rotations are ramped up in this many stages
     FLIP_FREE_STAGE_ITERATIONS=150,

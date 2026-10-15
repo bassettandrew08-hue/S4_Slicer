@@ -64,8 +64,13 @@ where it makes them, until there are none; the lift then has nothing (or little)
 | `PIT_FREE_MAX_STEP` | 10 | degrees: the most any tet's angle changes in one round |
 | `PIT_FREE_SMOOTH` | 4 | mm: each round's change is spread smoothly over about this distance |
 | `PIT_FREE_FRACTION` | 0.7 | each round aims to remove this fraction of the total pit depth (linear model) |
+| `PIT_FREE_REGION` | 0 (anywhere) | mm: > 0 changes the field only within this path distance of the first fit's pits (full weight to half of it, smoothly to 0 at the edge), and holds every vertex beyond it at its height while doing so, so the rest of the part keeps the fit's shape |
+| `PIT_FREE_HOLD` | 50 | with `PIT_FREE_REGION`: weight of those height springs |
+| `PIT_FREE_SEED_DEPTH` | 0 | with `PIT_FREE_REGION`: the region grows only from pit vertices deeper than this (mm) |
 
-The benchy profile for it is `params/benchy upsidedown tilted (pit-free).json` (pass it with `--params`). Numbers
+The benchy profiles for it are `params/benchy upsidedown tilted (pit-free).json` (whole field) and
+`params/benchy upsidedown tilted (lip rotation).json` (band lift v2 plus a local change at the bulwark lips); pass
+them with `--params`. Numbers
 are in the [CHANGELOG](../CHANGELOG.md#2026-10-14-pit-free-tilt-field-opt-in).
 
 ### Turning the field into a shape
