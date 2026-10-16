@@ -6,6 +6,7 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 `benchy upsidedown tilted` (33,156 tets) and `pi 3mm` models with default settings, unless noted.
 
 **Entries**
+- [2026-10-16: Review fixes (MAX_C_STEP by angle, support check on the smoothed path, ...)](#2026-10-16-review-fixes-max_c_step-by-angle-support-check-on-the-smoothed-path-)
 - [2026-10-14: Lip rotation: the bulwark lips by the tilt field (PIT_FREE_REGION)](#2026-10-14-lip-rotation-the-bulwark-lips-by-the-tilt-field-pit_free_region)
 - [2026-10-14: Pit-free tilt field (opt-in)](#2026-10-14-pit-free-tilt-field-opt-in)
 - [2026-10-14: Band lift: hull layer bands without islands (LIFT_MODE band)](#2026-10-14-band-lift-hull-layer-bands-without-islands-lift_mode-band)
@@ -23,6 +24,65 @@ pipeline is in [S4_PIPELINE.md](S4_PIPELINE.md); which setting turns on which fi
 - [2026-09-27: Island-free deformation](#2026-09-27-island-free-deformation)
 - [2026-09-26: Output fixes, build profiles, docs](#2026-09-26-output-fixes-build-profiles-docs)
 - [2026-09-25: Headless pipeline](#2026-09-25-headless-pipeline)
+
+---
+
+## 2026-10-16: Review fixes (MAX_C_STEP by angle, support check on the smoothed path, ...)
+
+### Changed output
+- **`MAX_C_STEP` cuts by angle.** It counted n = int(sweep / step) + 1 pieces but cut the move into equal lengths,
+  so near the turntable axis nearly all of the sweep landed in the middle piece (a 0.6 mm move 0.05 mm from the
+  axis: worst piece 12.5 deg, 0.01 mm: 53.9 deg, with a 3 deg step). Now the cuts are where the rays at equal C
+  steps cross the move (`fast_map.c_split_fractions`, shared by both implementations): every piece sweeps the same
+  angle (2.98 / 2.99 deg there). Each piece gets its share of the move's E (the last one the rest, so they sum to
+  it) and its share of the move's time (inverse-time feed = the move's / share), so the move takes as long as
+  before. With B interpolation as well, the pieces are cut at both sets of cuts. The unretract
+  (E = +`RETRACTION_LENGTH` with `SPLIT_RETRACTIONS` off) is no longer cut; a move along a line through the axis
+  (C flips by 180 deg there whatever the cuts) is not cut.
+- **The support check measures the written path.** With `MAP_SMOOTH` on it used the positions before the smoothing
+  (up to `MAP_SMOOTH_MAX` = 0.2 mm off the G-code); now both implementations check the smoothed ones.
+- `deform.target_tilt_deg` is Byrd's field's target; with `PIT_FREE_ROUNDS` the changed field's is
+  `deform.pit_free_target_tilt_deg` (before, `target_tilt_deg` showed the changed one).
+- `tools/shape_metrics.py`: the STL is moved by the run's `PART_OFFSET` (read from the G-code header), and
+  `asym_mm` mirrors about the exact area-weighted surface centroid instead of the mean of 100k random samples.
+
+### Fixed (errors instead of wrong output)
+- `PIT_FREE_REGION` > 0 with no pit deeper than `PIT_FREE_SEED_DEPTH` changed the whole field (no mask); now the
+  field stays as it is (benchy with `PIT_FREE_SEED_DEPTH` 1000: field change 0, the band lift lifts 357 vertices).
+- `LIFT_MODE` band: a surface component entirely inside the lifted region (no rim, e.g. an inner shell) made the
+  harmonic fill singular (spsolve gave ~0, targets near the bed); such components keep the flood level now. A body the
+  bed flood never reaches (not connected to the bed through the mesh) raises a clear error in both lift modes and in
+  `PIT_FREE` (it gave infinite targets), and tets the cell graph's Dijkstra never reaches raise the same clear error
+  in both implementations (the reference raised KeyError, the fast code went on with garbage).
+- A move at F0: the vectorised G-code reader wrote F0; all three readers now raise a clear error (the old loop raised
+  ZeroDivisionError).
+- `--notebook-exact` also resets `TET_MAX_VOLUME` (null) and `SURFACE_SIMPLIFY_ERROR` (0), and an iteration's own
+  `DEFORMATION_METHOD`. Profile values are type-checked (numeric settings must be numbers; `TET_MAX_VOLUME` null or
+  >= 0, the counts and distances >= 0). The header says "no maxvolume" for `TET_MAX_VOLUME` 0 (0 = no limit).
+- The poles / print-time worker: its failure is logged before the rerun in the process, and a failing support check
+  stops the worker instead of leaving the exit waiting for it. `--impl reference` deletes a stale `map_src.npy`.
+- The support check's nearest-earlier-point search stops at the bed distance (the cap it was clamped to; same values,
+  checked against a brute force).
+
+### Results
+Gates: notebook-exact identical, equivalence PASS (default, two iterations, `MAX_C_STEP` 1 with `SPLIT_RETRACTIONS`
+off and `MAP_SMOOTH` 0), print-time parity PASS. Six-model suite on the baseline's planar G-code
+(`--sliced-from`, so only the mapping differs; the deformed meshes are byte-identical):
+
+| model | waviness | ungrounded / island / cantilever walls (mm) | asym_mm |
+|---|---|---|---|
+| pi 3mm | 191 -> 138 | 0 / 0 / 0 | 0.437 -> 0.436 |
+| Squirtle | 111 -> 100 | 0.7 / 1.3 / 4.6 (same) | - |
+| dino | 78 -> 62 | 4.9 / 8.4 / 24.5 -> 25.1 | 1.307 -> 1.287 |
+| z mount 3mm | 137 -> 117 | 0.3 / 0.8 / 0 (same) | - |
+| B axis mount 5mm | 231 -> 165 | 1.3 -> 2.0 / 1.8 -> 3.1 / 13.0 -> 11.8 | - |
+
+The waviness drop is the angle cut (the equal-length pieces kinked where they met near the axis). The support
+changes are all the smoothed positions: the B axis mount's check on the old, unsmoothed positions of the same run
+gives exactly the old numbers; on the written path one 1.3 mm cantilever run is an island (its points sit just beyond
+the 1 mm radius of the layer below). Benchy (lip-rotation profile, re-sliced) vs its log
+(`build/timing/benchy upsidedown tilted.log`): ungrounded / island / cantilever walls 23.0 / 11.4 / 3.4 ->
+22.9 / 11.3 / 3.4 mm.
 
 ---
 

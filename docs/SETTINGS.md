@@ -46,7 +46,7 @@ from it.
 | `MAX_POS_ROTATION`, `MAX_NEG_ROTATION` | ±360° | clamp on the target rotation |
 | `PART_OFFSET` | [0, 0, 0] | shift the part on the plate, in mm (subtracted) |
 | `SURFACE_SIMPLIFY_ERROR` | 0 (off) | not in the notebook. Coarsen needlessly fine surface triangles before TetGen (quadric error bound; `1e-5` ≈ 0.01 mm). For CAD exports that draw small holes with tiny segments: TetGen fills them with microscopic tets that the deformation tears apart. The log prints how far the surface moved. Whole run only, not per iteration |
-| `TET_MAX_VOLUME` | null (off) | not in the notebook. Largest tet volume in mm^3 for TetGen (`fixedvolume`): a denser mesh, for a smoother deformation. null = TetGen's default mesh. Run time grows about in proportion to the tet count (see [DEVELOPING.md](DEVELOPING.md#where-the-time-goes)). Whole run only, not per iteration |
+| `TET_MAX_VOLUME` | null (off) | not in the notebook. Largest tet volume in mm^3 for TetGen (`fixedvolume`): a denser mesh, for a smoother deformation. null or 0 = TetGen's default mesh (`--notebook-exact` sets null). Run time grows about in proportion to the tet count (see [DEVELOPING.md](DEVELOPING.md#where-the-time-goes)). Whole run only, not per iteration |
 | `ROTATION_ITERATIONS` | 100 | solver budget for the tilt field. Changing it changes the result, not just the speed |
 | `iterations` | (none) | multi-iteration schedule, see above |
 
@@ -133,9 +133,9 @@ Off by default. Both implementations have them (fast and reference stay byte-ide
 
 | setting | default | what it does |
 |---|---|---|
-| `MAP_SMOOTH` | 0 (off) | mm. The deformation is linear per tet, so a straight planar line bends wherever it crosses a tet face (wavy walls). > 0 re-estimates the mapping at every printed point by a local linear fit over its neighbours on the same printed run, Gaussian-weighted over this distance. Affine maps, corners and curves are kept exactly; only the bends at tet faces are blended. 1.0 is a good value |
+| `MAP_SMOOTH` | 0.5 (branch smoothing; 0 = off) | mm. The deformation is linear per tet, so a straight planar line bends wherever it crosses a tet face (wavy walls). > 0 re-estimates the mapping at every printed point by a local linear fit over its neighbours on the same printed run, Gaussian-weighted over this distance. Affine maps, corners and curves are kept exactly; only the bends at tet faces are blended. 1.0 is a good value |
 | `MAP_SMOOTH_MAX` | 0.2 | mm, the most `MAP_SMOOTH` may move a point (typical moves are 0.01-0.02 mm) |
-| `MAX_C_STEP` | 0 (off) | degrees. The machine moves C and X linearly, so near the turntable axis a print move that sweeps a large C angle comes out curved, and the path kinks where moves meet. > 0 splits print moves so none sweeps more than this. 3 is a good value |
+| `MAX_C_STEP` | 3 (branch smoothing; 0 = off) | degrees. The machine moves C and X linearly, so near the turntable axis a print move that sweeps a large C angle comes out curved, and the path kinks where moves meet. > 0 cuts print moves (not the unretract) where the rays at equal C steps cross them, so every piece sweeps the same angle, at most this; each piece gets its share of the move's E and of its time. A move exactly through the axis (C flips by 180 deg there) is not cut |
 
 ### Machine limits
 | setting | default | what it does |
