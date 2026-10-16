@@ -81,7 +81,8 @@ def measure(model, gc, log=None, seconds=None):
     res = {k: computed[k] if k in computed else num(k) for k in METRICS}
     p0, p1 = quality.bead_segments(gc, num("NOZZLE_OFFSET", 42.0))
     res.update(shape_metrics.measure(model, os.path.join(HERE, "input_models", f"{model}.stl"), r["mid"],
-                                     np.linalg.norm(p1 - p0, axis=1), r["rough"]))
+                                     np.linalg.norm(p1 - p0, axis=1), r["rough"],
+                                     shape_metrics.part_offset_of(gc, gc[:-len(".gcode")])))
     res.update(target_tilt_deg=num("deform.target_tilt_deg"), segments=r["segments"],
                seconds=round(seconds, 1) if seconds else None)
     # waviness: joints turning > 10 deg where the planar path runs straight (tools/roughness_breakdown.py); needs the

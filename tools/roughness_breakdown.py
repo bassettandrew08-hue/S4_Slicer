@@ -247,7 +247,7 @@ def analyse(run_dir, model, sets=(), mp_over=None, verbose=True, flat=None):
     # surface rough share, as tools/shape_metrics
     from tools import shape_metrics
     import open3d as o3d
-    mesh = shape_metrics._model(stl)
+    mesh = shape_metrics._model(stl, off)
     scene = o3d.t.geometry.RaycastingScene()
     scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mesh))
     mid = (p0 + p1) / 2
