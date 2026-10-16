@@ -84,7 +84,9 @@ CURA_DEFAULTS = dict(
     set={},                         # Cura setting overrides, e.g. {"layer_height": 0.1}
     strip_start_prime=True,         # drop Cura's start-code prime (it would land inside the part)
 )
-NOTEBOOK_EXACT = {"deform": {"DEFORMATION_METHOD": "notebook"},
+# deform: the notebook's solve and the notebook's mesh (TetGen defaults on the unsimplified surface); the
+# island_free keys (LIFT_*, PIT_FREE_*, ...) only act in DEFORMATION_METHOD "island_free"
+NOTEBOOK_EXACT = {"deform": {"DEFORMATION_METHOD": "notebook", "TET_MAX_VOLUME": None, "SURFACE_SIMPLIFY_ERROR": 0.0},
                   "map": {"SPLIT_RETRACTIONS": False, "SMOOTH_EXTRUSION_MULTIPLIER": False,
                           "SAFE_TRAVEL_TRANSITIONS": False, "LIMIT_AXIS_SPEEDS": False,
                           "EXTRUSION_MULTIPLIER_RANGE": None, "MAP_SMOOTH": 0, "MAX_C_STEP": 0},
@@ -111,6 +113,34 @@ def _check_keys(section, d, known, where):
     for k in d:
         if k not in known:
             raise ProfileError(f"{where}: unknown {section} setting {k!r}{_suggest(k, known)}")
+
+
+# settings that must be >= 0 (the rest of the numeric ones may be negative, e.g. MIN_ROTATION)
+NON_NEGATIVE = {"TET_MAX_VOLUME", "SURFACE_SIMPLIFY_ERROR", "PIT_FREE_ROUNDS", "PIT_FREE_REGION", "PIT_FREE_HOLD",
+                "PIT_FREE_SEED_DEPTH", "PIT_FREE_SMOOTH", "PIT_FREE_MAX_STEP", "PIT_FREE_FRACTION", "LIFT_BAND_MARGIN",
+                "ISLAND_LIFT_ROUNDS", "ISLAND_LIFT_SLOPE", "LIFT_HOLD_FALLOFF", "MAX_C_STEP", "MAP_SMOOTH",
+                "MAP_SMOOTH_MAX", "SEG_SIZE"}
+NULLABLE = {"TET_MAX_VOLUME", "RETRACTION_LENGTH"}  # numeric or null
+
+
+def _is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _check_values(section, d, known, where):
+    """Settings whose default is a number must be numbers (a clear error instead of a TypeError deep in a run)."""
+    for k, v in d.items():
+        default = known.get(k)
+        numeric = k in NULLABLE or (isinstance(default, (int, float)) and not isinstance(default, bool))
+        if not numeric:
+            continue
+        if v is None and k in NULLABLE:
+            continue
+        if not _is_number(v):
+            null = " or null" if k in NULLABLE else ""
+            raise ProfileError(f"{where}: {section} setting {k} must be a number{null}, got {v!r}")
+        if k in NON_NEGATIVE and v < 0:
+            raise ProfileError(f"{where}: {section} setting {k} must be >= 0, got {v!r}")
 
 
 def _normalise_deg(d):
@@ -141,6 +171,7 @@ def merge(profile, overlay, where="profile"):
         d = _normalise_deg({k: v for k, v in overlay["deform"].items() if not k.startswith("_")})
         its = d.pop("iterations", None)
         _check_keys("deform", d, list(DEFAULT_PARAMS), where)
+        _check_values("deform", d, DEFAULT_PARAMS, where)
         p["deform"].update(d)
         if its is not None:
             if not isinstance(its, list) or not its:
@@ -151,11 +182,13 @@ def merge(profile, overlay, where="profile"):
                 mesh_keys = ("PART_OFFSET", "SURFACE_SIMPLIFY_ERROR", "TET_MAX_VOLUME")  # one mesh for all iterations
                 _check_keys("deform", it, [k for k in DEFAULT_PARAMS if k not in mesh_keys],
                             f"{where} iteration {i + 1}")
+                _check_values("deform", it, DEFAULT_PARAMS, f"{where} iteration {i + 1}")
                 clean.append(it)
             p["deform"]["iterations"] = clean
     if "map" in overlay:
         m = _normalise_deg({k: v for k, v in overlay["map"].items() if not k.startswith("_")})
         _check_keys("map", m, list(MAP_DEFAULTS), where)
+        _check_values("map", m, MAP_DEFAULTS, where)
         p["map"].update(m)
     if "cura" in overlay:
         c = {k: v for k, v in overlay["cura"].items() if not k.startswith("_")}
@@ -223,6 +256,10 @@ def resolve(model_path, params_path=None, sets=(), cura_sets=None, cura_config=N
         p["cura"]["config"] = cura_config
     if notebook_exact:
         p = merge(p, NOTEBOOK_EXACT, where="--notebook-exact")
+        for it in p["deform"].get("iterations") or []:  # an iteration's own value would win over the base's
+            for k, v in NOTEBOOK_EXACT["deform"].items():
+                if k in it:
+                    it[k] = v
     return p, source
 
 

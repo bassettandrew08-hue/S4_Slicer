@@ -127,7 +127,7 @@ def s4_lines(model_name, profile, stats, deform_info=None, planar_source=None):
     _, iters = expand_iterations(deform)
     out.append(f"; s4: iterations = {len(iters)}")
     for k, v in deform.items():
-        if k == "iterations" or (k == "TET_MAX_VOLUME" and v is None):  # None: the line below says so
+        if k == "iterations" or (k == "TET_MAX_VOLUME" and not v):  # None/0: the line below says so
             continue
         out.append(f"; s4: {k} = {_fmt_param(k, v)}")
     if len(iters) > 1:
@@ -135,7 +135,7 @@ def s4_lines(model_name, profile, stats, deform_info=None, planar_source=None):
             for k, v in it.items():
                 out.append(f"; s4: iteration_{i}.{k} = {_fmt_param(k, v)}")
     mv = deform.get("TET_MAX_VOLUME")
-    out.append("; s4: tetrahedralize = default (no maxvolume)" if mv is None else
+    out.append("; s4: tetrahedralize = default (no maxvolume)" if not mv else  # None or 0 = no limit
                f"; s4: tetrahedralize = fixedvolume, maxvolume {_fmt(mv)} mm^3")
     for k, v in profile["map"].items():
         out.append(f"; s4: {k} = {_fmt_param(k, v)}")
