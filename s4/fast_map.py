@@ -52,6 +52,66 @@ def tet_volumes(p1, p2, p3, p4):
     return _abs_det3(np.stack([p2 - p1, p3 - p1, p4 - p1], axis=1)) / 6
 
 
+def c_split_fractions(x0, y0, x1, y1, cstep, n_rot=1):
+    """MAX_C_STEP (shared with s4/reference.py, so both cut at the same floats): where to cut a print move from
+    (x0, y0) to (x1, y1) so that no piece sweeps more than cstep rad of C (C is the polar angle of the position).
+
+    The cuts are where the rays at th0 + k * dth / n (k = 1 .. n - 1, n = int(|dth| / cstep) + 1) cross the move,
+    so every piece sweeps the same angle, dth / n. (Cutting into equal lengths instead puts nearly all of the sweep
+    of a move passing close to the axis into its middle piece.) A straight move that misses the axis turns
+    monotonically by less than 180 deg, so each ray crosses it once. n_rot > 1 adds the cuts k / n_rot of the
+    B-interpolation split (ROTATION_MAX_DELTA). Returns the increasing fractions of the move at which the pieces
+    end (the last one 1.0), or None when the move sweeps at most cstep. A move along a line through the axis
+    (C flips by 180 deg at r = 0, which no cut changes) is not cut."""
+    th0 = math.atan2(y0, x0)
+    dth = math.atan2(y1, x1) - th0
+    dth = (dth + math.pi) % (2 * math.pi) - math.pi
+    if abs(dth) <= cstep:
+        return None
+    dx, dy = x1 - x0, y1 - y0
+    if x0 * dy - y0 * dx == 0:
+        return None
+    n = int(abs(dth) / cstep) + 1
+    cuts = []
+    for k in range(1, n):
+        phi = th0 + dth * k / n
+        ux, uy = math.cos(phi), math.sin(phi)
+        den = ux * dy - uy * dx
+        if den != 0:
+            s = (uy * x0 - ux * y0) / den
+            if 0.0 < s < 1.0:
+                cuts.append(s)
+    cuts.extend(k / n_rot for k in range(1, n_rot))
+    out = []
+    for s in sorted(cuts):
+        if not out or s > out[-1]:
+            out.append(s)
+    out.append(1.0)
+    return out
+
+
+def split_pieces(fractions, extrusion, inv_time_feed):
+    """Per piece of a move cut at `fractions` (c_split_fractions): (end fraction, E, inverse-time feed). A piece's E
+    is its share of the move's E (the last piece takes the rest, so they sum to the move's E) and its time is its
+    share of the move's time, so the move takes as long as before: inverse-time feed = the move's / share."""
+    out = []
+    prev = 0.0
+    left = extrusion
+    last = len(fractions) - 1
+    for k, s in enumerate(fractions):
+        share = s - prev
+        prev = s
+        if extrusion is None:
+            e = None
+        elif k == last:
+            e = left
+        else:
+            e = extrusion * share
+            left = left - e
+        out.append((s, e, inv_time_feed / share if inv_time_feed is not None else None))
+    return out
+
+
 _POINTS_CACHE = {}  # (path, size, mtime, SEG_SIZE) -> read_gcode_points result (the mapper and the support check)
 
 
@@ -137,6 +197,9 @@ def _read_gcode_points(path, SEG_SIZE):
     feed_obj = [5000] + V[:, 3].tolist()
     feed_at = [feed_obj[j + 1] for j in fidx.tolist()]
     feed_f = np.array(feed_at, dtype=np.float64)
+    if (feed_f == 0).any():  # the loop (and the reference) divide by the feed: 1 / 0 raised there, here it gave F0
+        ln = int(line_no[int(np.argmax(feed_f == 0))])
+        raise ValueError(f"{path}: line {ln + 1}: a move at feed rate 0 (F0) has no finite time; give the move a feed rate")
     moving = distance > 0
     nseg = np.ones(m)
     nseg[moving] = -(-distance[moving] // SEG_SIZE)
@@ -177,7 +240,7 @@ def _read_gcode_points_loop(path, SEG_SIZE):
     feeds = []
     with open(path, "r") as fh:
         text = fh.read()
-    for raw in text.splitlines():
+    for ln, raw in enumerate(text.splitlines()):
         code = raw.split(";", 1)[0]
         if "(" in code:
             code = re.sub(r"\([^)]*\)", "", code)
@@ -217,6 +280,8 @@ def _read_gcode_points_loop(path, SEG_SIZE):
             pos[2] = z
         if f_val is not None:
             feed = f_val
+        if feed == 0:
+            raise ValueError(f"{path}: line {ln + 1}: a move at feed rate 0 (F0) has no finite time; give the move a feed rate")
         extrusion = e_val
         delta_pos = pos - prev_pos
         distance = np.linalg.norm(delta_pos)
@@ -334,14 +399,14 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
             squish_all = np.sum(vertex_ratio[idx] * bary, axis=1)
         else:
             squish_all = z_squish_scales[containing]
-    # for the support check (s4/support_check.py check(mapped=...)): it maps the same points the same way
-    LAST_MAP.clear()
-    LAST_MAP.update(planar=gcode_path, seg_size=mp["SEG_SIZE"], g=g, real=new_pos_all, ok=bary_ok)
-
-    if mp.get("MAP_SMOOTH", 0) and mp["MAP_SMOOTH"] > 0:
+    smooth = map_smooth_of(mp)
+    if smooth is not None:
         with TIMER("smooth mapping (MAP_SMOOTH)"):
-            new_pos_all = smooth_mapping(P, new_pos_all, bary_ok, g, mp["RETRACTION_LENGTH"], float(mp["MAP_SMOOTH"]),
-                                         float(mp.get("MAP_SMOOTH_MAX", 0.2)))
+            new_pos_all = smooth_mapping(P, new_pos_all, bary_ok, g, mp["RETRACTION_LENGTH"], *smooth)
+    # for the support check (s4/support_check.py check(mapped=...)): the positions the G-code is written from
+    LAST_MAP.clear()
+    LAST_MAP.update(planar=gcode_path, seg_size=mp["SEG_SIZE"], g=g, real=new_pos_all, ok=bary_ok,
+                    map_smooth=smooth, retraction=mp["RETRACTION_LENGTH"])
 
     with TIMER("sequential smoothing loop"):
         out = _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp)
@@ -355,7 +420,14 @@ def map_gcode(input_cells, input_points, input_centers, def_points, def_centers,
 
 
 SMOOTH_STATS = {}  # diagnostics of the last smooth_mapping call
-LAST_MAP = {}  # the last map_gcode's planar points, their real-space positions (before MAP_SMOOTH) and in-mesh flags
+LAST_MAP = {}  # the last map_gcode's planar points, their real-space positions (after MAP_SMOOTH) and in-mesh flags
+
+
+def map_smooth_of(mp):
+    """(sigma, max_shift) of MAP_SMOOTH, or None when it is off: what smooth_mapping gets from the map settings."""
+    if mp.get("MAP_SMOOTH", 0) and mp["MAP_SMOOTH"] > 0:
+        return float(mp["MAP_SMOOTH"]), float(mp.get("MAP_SMOOTH_MAX", 0.2))
+    return None
 
 
 def smooth_mapping(P, mapped, ok, g, retraction, sigma, max_shift, window=12, chunk=100000):
@@ -530,40 +602,43 @@ def _sequential(new_pos_all, rot_all, bary_ok, squish_all, g, mp):
             else:
                 emit(tuple(new_position), rotation, "G01", extrusion, None, prev_travelling, feeds[i], True)
 
-        n_c = 1
-        if CSTEP and prev_new_position is not None and motion_extrusion is not None and motion_extrusion > 0:
-            # MAX_C_STEP: the machine moves C and X linearly, so near the turntable axis a move that sweeps a large
-            # C angle is drawn as a curve; split it so every step sweeps at most CSTEP
-            dth = math.atan2(new_position[1], new_position[0]) - math.atan2(prev_new_position[1], prev_new_position[0])
-            dth = abs((dth + math.pi) % (2 * math.pi) - math.pi)
-            if dth > CSTEP:
-                n_c = int(dth / CSTEP) + 1
-        if prev_new_position is not None and n_c > 1 and abs(rotation - prev_rotation) <= MAXD:
+        # MAX_C_STEP: the machine moves C and X linearly, so near the turntable axis a move that sweeps a large C
+        # angle is drawn as a curve; print moves (not the unretract) are cut so every piece sweeps at most CSTEP
+        rot_split = prev_new_position is not None and abs(rotation - prev_rotation) > MAXD
+        fr = None
+        if (CSTEP and prev_new_position is not None and motion_extrusion is not None and motion_extrusion > 0
+                and motion_extrusion != RET and motion_extrusion != -RET):
+            fr = c_split_fractions(prev_new_position[0], prev_new_position[1], new_position[0], new_position[1],
+                                   CSTEP, int(abs(rotation - prev_rotation) / MAXD) + 1 if rot_split else 1)
+        if rot_split:
+            delta_rotation = rotation - prev_rotation
+            n = int(abs(delta_rotation) / MAXD) + 1
+            dx = new_position[0] - prev_new_position[0]
+            dy = new_position[1] - prev_new_position[1]
+            dz = new_position[2] - prev_new_position[2]
+            cur[1] = 1  # rotation-split steps
+            if fr is None:
+                e_i = motion_extrusion / n if motion_extrusion is not None else None
+                f_i = inv_time_feed * n if inv_time_feed is not None else None
+                for k in range(n):
+                    s = (k + 1) / n
+                    emit((prev_new_position[0] + dx * s, prev_new_position[1] + dy * s, prev_new_position[2] + dz * s),
+                         prev_rotation + delta_rotation * s, move_command if SAFE else prev_command, e_i, f_i,
+                         prev_travelling, feeds[i])
+            else:  # the B steps' cuts and the C steps' cuts together
+                for s, e_i, f_i in split_pieces(fr, motion_extrusion, inv_time_feed):
+                    emit((prev_new_position[0] + dx * s, prev_new_position[1] + dy * s, prev_new_position[2] + dz * s),
+                         prev_rotation + delta_rotation * s, move_command if SAFE else prev_command, e_i, f_i,
+                         prev_travelling, feeds[i])
+        elif fr is not None:
             cur[1] = 4  # C-split steps
             dx = new_position[0] - prev_new_position[0]
             dy = new_position[1] - prev_new_position[1]
             dz = new_position[2] - prev_new_position[2]
             dr = rotation - prev_rotation
-            e_i = motion_extrusion / n_c
-            f_i = inv_time_feed * n_c if inv_time_feed is not None else None
-            for k in range(n_c):
-                s = (k + 1) / n_c
+            for s, e_i, f_i in split_pieces(fr, motion_extrusion, inv_time_feed):
                 emit((prev_new_position[0] + dx * s, prev_new_position[1] + dy * s, prev_new_position[2] + dz * s),
                      prev_rotation + dr * s, move_command, e_i, f_i, travelling, feeds[i])
-        elif prev_new_position is not None and abs(rotation - prev_rotation) > MAXD:
-            delta_rotation = rotation - prev_rotation
-            n = max(int(abs(delta_rotation) / MAXD) + 1, n_c)
-            dx = new_position[0] - prev_new_position[0]
-            dy = new_position[1] - prev_new_position[1]
-            dz = new_position[2] - prev_new_position[2]
-            e_i = motion_extrusion / n if motion_extrusion is not None else None
-            f_i = inv_time_feed * n if inv_time_feed is not None else None
-            cur[1] = 1  # rotation-split steps
-            for k in range(n):
-                s = (k + 1) / n
-                emit((prev_new_position[0] + dx * s, prev_new_position[1] + dy * s, prev_new_position[2] + dz * s),
-                     prev_rotation + delta_rotation * s, move_command if SAFE else prev_command, e_i, f_i,
-                     prev_travelling, feeds[i])
         else:
             emit(tuple(new_position), rotation, move_command, motion_extrusion, inv_time_feed, travelling, feeds[i])
 

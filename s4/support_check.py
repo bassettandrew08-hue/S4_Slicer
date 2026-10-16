@@ -78,11 +78,13 @@ def _planar_layers_loop(planar_path, seg_size):
 
 
 def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), radius=1.0, seg_size=0.6,
-          retraction_length=1.0, input_grid=None, simplify_error=0.0, max_volume=None, mapped=None):
+          retraction_length=1.0, input_grid=None, simplify_error=0.0, max_volume=None, mapped=None, map_smooth=None):
     """input_grid: undeformed tet mesh to use instead of re-running tetgen on model_path (simplify_error, max_volume:
     the deform's SURFACE_SIMPLIFY_ERROR and TET_MAX_VOLUME, so the re-run gives the same mesh).
     mapped: fast_map.LAST_MAP of the mapper's run on the same mesh, deformed points and planar G-code: its planar
-    points, real-space positions and in-mesh flags are exactly what this function would compute, so they are reused."""
+    points, real-space positions and in-mesh flags are exactly what this function would compute, so they are reused.
+    map_smooth: fast_map.map_smooth_of(map settings): with MAP_SMOOTH on, the positions are smoothed the same way as
+    the mapper's (fast_map.smooth_mapping), so the check measures the path that is written."""
     inp = input_grid if input_grid is not None else meshio_s4.load_and_tetrahedralize(model_path, part_offset,
                                                                                        simplify_error, max_volume)
     cells = meshio_s4.cells_of(inp)
@@ -90,7 +92,8 @@ def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), ra
     Pd = np.asarray(deformed_points)
     d = meshio_s4.deformed_grid_from_points(inp, Pd)
 
-    if mapped is not None and mapped.get("seg_size") == seg_size and mapped.get("planar") == planar_path:
+    if (mapped is not None and mapped.get("seg_size") == seg_size and mapped.get("planar") == planar_path
+            and mapped.get("map_smooth") == map_smooth and mapped.get("retraction") == retraction_length):
         g = mapped["g"]
         P = g["position"]
         real, ok = mapped["real"], mapped["ok"]
@@ -106,6 +109,8 @@ def check(model_path, deformed_points, planar_path, part_offset=(0., 0., 0.), ra
                          fast_map.tet_volumes(P, cv[:, 0], cv[:, 1], cv[:, 2])], axis=1) / total[:, None]
         real = P - np.sum((Pd - P0)[cells[cont]] * bary[:, :, None], axis=1)
         ok = ~(bary.sum(axis=1) > 1.01)
+        if map_smooth is not None:
+            real = fast_map.smooth_mapping(P, real, ok, g, retraction_length, *map_smooth)
     layer, types = _planar_layers(planar_path, seg_size, g)
     assert len(layer) == len(P)
     ext = np.array([e is not None and e > 0 and abs(e) != retraction_length for e in g["extrusion"]])
@@ -173,13 +178,16 @@ class _Earlier:
         return _grid_any_within(np.ascontiguousarray(pts, dtype=np.float64), self._ijk(pts), self.U, self.on,
                                 self.order, self.keys, self.start, self.dims, self.R * self.R)
 
-    def nearest(self, pts):
+    def nearest(self, pts, cap=None):
+        """Distance to the nearest switched-on point, or min(that, cap) per point when cap is given (the search
+        then stops once nothing closer than cap can be left: same values as np.minimum(nearest(pts), cap))."""
         if len(pts) == 0:
             return np.zeros(0)
+        cap = np.full(len(pts), np.inf) if cap is None else np.ascontiguousarray(cap, dtype=np.float64)
         if not self.on.any():
-            return np.full(len(pts), np.inf)
+            return np.minimum(np.full(len(pts), np.inf), cap)
         return _grid_nearest(np.ascontiguousarray(pts, dtype=np.float64), self._ijk(pts), self.U, self.on,
-                             self.order, self.keys, self.start, self.dims, self.R)
+                             self.order, self.keys, self.start, self.dims, self.R, cap)
 
 
 @numba.njit(cache=True, inline="always")
@@ -232,9 +240,10 @@ def _grid_any_within(Q, ijk, U, on, order, keys, start, dims, R2):
 
 
 @numba.njit(parallel=True, cache=True)
-def _grid_nearest(Q, ijk, U, on, order, keys, start, dims, R):
-    """Distance to the nearest switched-on point (inf if none): rings of cells around the query's cell, until the
-    best distance found is shorter than anything further out can be."""
+def _grid_nearest(Q, ijk, U, on, order, keys, start, dims, R, cap):
+    """min(distance to the nearest switched-on point (inf if none), cap): rings of cells around the query's cell,
+    until the best distance found, or the cap, is shorter than anything further out can be. Stopping at the cap
+    leaves the result unchanged: everything not searched is further than s * R >= cap, and sqrt(cap * cap) == cap."""
     out = np.full(len(Q), np.inf)
     max_ring = max(dims[0], max(dims[1], dims[2]))
     for i in numba.prange(len(Q)):
@@ -259,9 +268,9 @@ def _grid_nearest(Q, ijk, U, on, order, keys, start, dims, R):
                                 if d < best:
                                     best = d
             # anything in ring s + 1 or further is more than s * R away
-            if best < (s * R) * (s * R):
+            if best < (s * R) * (s * R) or s * R >= cap[i]:
                 break
-        out[i] = np.sqrt(best)
+        out[i] = min(np.sqrt(best), cap[i])
     return out
 
 
@@ -296,11 +305,11 @@ class _EarlierKD:
             hit |= t.query_ball_point(pts, self.R, return_length=True) > 0
         return hit
 
-    def nearest(self, pts):
+    def nearest(self, pts, cap=None):
         d = np.full(len(pts), np.inf)
         for t in self._trees():
             d = np.minimum(d, t.query(pts, k=1)[0])
-        return d
+        return d if cap is None else np.minimum(d, cap)
 
 
 def _layer_order(Ly):
@@ -325,7 +334,7 @@ def analyse(real, ext, layer, types, radius):
         if len(c):
             unsupported[c] = ~earlier.any_within(Q[c])
             f = c[unsupported[c]]
-            gap[ei[f]] = np.minimum(earlier.nearest(Q[f]), Q[f, 2])  # gap to anything printed earlier, or the bed
+            gap[ei[f]] = earlier.nearest(Q[f], cap=Q[f, 2])  # gap to anything printed earlier, or the bed
         earlier.add_index(idx)
     floating = np.zeros(len(P), bool)
     floating[ei[unsupported]] = True

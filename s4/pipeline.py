@@ -41,10 +41,11 @@ def final_checks(out_gcode, mp, retraction):
 
 
 class _Background:
-    """final_checks in a worker process (S4_NO_WORKER=1, or a failure to start one: in this process, when asked)."""
+    """final_checks in a worker process (S4_NO_WORKER=1, or a failure to start one: in this process, when asked).
+    close() drops the worker without waiting (run() calls it when a stage after the start fails)."""
 
-    def __init__(self, *args):
-        self.args, self.fut, self.pool = args, None, None
+    def __init__(self, *args, log=print):
+        self.args, self.fut, self.pool, self.log = args, None, None, log
         if os.environ.get("S4_NO_WORKER") == "1":
             return
         try:
@@ -52,7 +53,9 @@ class _Background:
             from concurrent.futures import ProcessPoolExecutor
             self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
             self.fut = self.pool.submit(final_checks, *args)
-        except Exception:
+        except Exception as e:
+            self.log(f"[checks] could not start the worker process ({type(e).__name__}: {e}); running here")
+            self.close()
             self.fut = None
 
     def result(self):
@@ -60,12 +63,20 @@ class _Background:
             if self.fut is not None:
                 try:
                     return self.fut.result()
-                except Exception:
-                    pass  # e.g. a broken worker: do it here
+                except Exception as e:  # e.g. a broken worker: do it here (a real error raises again here)
+                    self.log(f"[checks] the worker failed ({type(e).__name__}: {e}); running the poles check and "
+                             f"the print-time estimate here")
             return final_checks(*self.args)
         finally:
-            if self.pool is not None:
-                self.pool.shutdown()
+            self.close()
+
+    def close(self, kill=False):
+        if self.pool is not None:
+            procs = list(getattr(self.pool, "_processes", {}).values()) if kill else []
+            self.pool.shutdown(wait=False, cancel_futures=True)
+            for pr in procs:  # a running task is not cancelled by shutdown: stop its process
+                pr.terminate()
+            self.pool = None
 
 
 def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_engine=None, sliced_gcode=None,
@@ -162,6 +173,9 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
             retraction = mp["RETRACTION_LENGTH"]
             if impl == "reference":
                 from . import reference as ref
+                src_path = os.path.join(work_dir, "map_src.npy")
+                if os.path.exists(src_path):  # an earlier fast run's: it would not match this G-code
+                    os.remove(src_path)
                 pts, stats = ref.map_gcode(input_tet, deformed, planar_path, mp)
                 with TIMER("write G-code"):
                     ref.write_gcode(pts, out_gcode, NOZZLE_OFFSET=mp["NOZZLE_OFFSET"])
@@ -182,23 +196,28 @@ def run(model_path, out_gcode, profile=None, impl="fast", work_dir=None, cura_en
                                                    mp["MAX_SPEED_Z"], nozzle_offset=mp["NOZZLE_OFFSET"]))
         # the poles check and the print-time estimate only read the finished G-code: start them now, in a worker
         # process, and let them run while the support check runs here
-        background = _Background(out_gcode, mp, retraction)
-        if support_check:
-            with TIMER("4. support check"):
-                from .params import expand_iterations
-                part_offset, iters = expand_iterations(p)
-                # the undeformed mesh of this run (re-running TetGen gives the same one), and for the fast
-                # implementation the mapper's own mapping of the same planar points (identical numbers)
-                mapped = None
-                if impl != "reference":
+        background = _Background(out_gcode, mp, retraction, log=log)
+        try:
+            if support_check:
+                with TIMER("4. support check"):
+                    from .params import expand_iterations
+                    part_offset, iters = expand_iterations(p)
+                    # the undeformed mesh of this run (re-running TetGen gives the same one), and for the fast
+                    # implementation the mapper's own mapping of the same planar points (identical numbers)
                     from . import fast_map
-                    mapped = fast_map.LAST_MAP
-                support = sc.check(model_path, np.asarray(deformed.points), planar_path,
-                                   part_offset=part_offset, retraction_length=retraction,
-                                   seg_size=mp["SEG_SIZE"], simplify_error=iters[0]["SURFACE_SIMPLIFY_ERROR"],
-                                   max_volume=iters[0]["TET_MAX_VOLUME"], input_grid=input_tet, mapped=mapped)
-            stats["floating_points"] = support["floating_points"]
-            log(sc.format_report(support))
+                    mapped = None
+                    if impl != "reference":
+                        mapped = fast_map.LAST_MAP
+                    support = sc.check(model_path, np.asarray(deformed.points), planar_path,
+                                       part_offset=part_offset, retraction_length=retraction,
+                                       seg_size=mp["SEG_SIZE"], simplify_error=iters[0]["SURFACE_SIMPLIFY_ERROR"],
+                                       max_volume=iters[0]["TET_MAX_VOLUME"], input_grid=input_tet, mapped=mapped,
+                                       map_smooth=fast_map.map_smooth_of(mp))
+                stats["floating_points"] = support["floating_points"]
+                log(sc.format_report(support))
+        except BaseException:  # don't leave the worker running (or the exit waiting for it)
+            background.close(kill=True)
+            raise
     with TIMER("poles + print-time estimate (worker; wait)"):
         poles, est, est_err, secs = background.result()
     TIMER.records.append([1, "poles check (in the worker)", secs[0]])

@@ -185,6 +185,9 @@ def update_attributes(tet, cell_to_face, graph, compute_in_air=True, dijkstra_ca
     else:
         with TIMER("dijkstra (numba, networkx order)"):
             dij = multi_source_dijkstra(graph, bottom_cells)
+    unreached = int((dij.root < 0).sum())
+    if unreached:  # the reference's paths_to_bottom[cell] would KeyError; fail the same way in both
+        raise meshio_s4.unreachable_cells_error(unreached, n)
 
     in_air = np.full(n, False)
     if compute_in_air:

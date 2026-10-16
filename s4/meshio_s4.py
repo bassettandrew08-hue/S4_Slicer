@@ -127,3 +127,10 @@ def make_find_cells(deformed_grid):
 
 def deformed_grid_from_points(input_grid, new_points):
     return pv.UnstructuredGrid(input_grid.cells, np.full(input_grid.number_of_cells, pv.CellType.TETRA), new_points)
+
+
+def unreachable_cells_error(n_unreached, n_cells):
+    """Both implementations' error for cells the cell graph's Dijkstra never reaches from the bottom cells."""
+    return ValueError(f"{n_unreached} of {n_cells} tets are not connected to the bottom cells through the mesh (a "
+                      f"separate body that does not touch the bed?); the rotation field needs a path to the bed from "
+                      f"every tet. Join the bodies or move them onto the bed.")

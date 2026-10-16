@@ -116,6 +116,8 @@ def update_tet_attributes(tet):
 
     with TIMER("update_tet_attributes: dijkstra"):
         _, paths_to_bottom = nx.multi_source_dijkstra(cell_neighbour_graph, set(bottom_cells))
+    if len(paths_to_bottom) < tet.number_of_cells:  # not in the notebook (it KeyErrors below): a clear error
+        raise meshio_s4.unreachable_cells_error(tet.number_of_cells - len(paths_to_bottom), tet.number_of_cells)
 
     with TIMER("update_tet_attributes: path_to_bottom + in_air loops"):
         # put it in cell data
@@ -767,7 +769,7 @@ def read_gcode_points(gcode_path, SEG_SIZE):
     feed = 5000
     gcode_points = []
     with open(gcode_path, 'r') as fh:
-        for line_text in fh.readlines():
+        for ln, line_text in enumerate(fh.readlines()):
             line = Line(line_text)
 
             if not line.block.gcodes:
@@ -788,6 +790,9 @@ def read_gcode_points(gcode_path, SEG_SIZE):
                     for word in line.block.words:
                         if word.letter == "F":
                             feed = word.value
+                    if feed == 0:  # not in the notebook (1 / feed raised ZeroDivisionError): a clear error
+                        path = gcode_path
+                        raise ValueError(f"{path}: line {ln + 1}: a move at feed rate 0 (F0) has no finite time; give the move a feed rate")
 
                     extrusion = None
                     for param in line.block.modal_params:
@@ -1063,33 +1068,38 @@ def map_gcode(input_tet, deformed_tet, gcode_path, mp=None):
                     "extrusion_multiplier": extrusion_multiplier, "feed": gcode_point["feed"],
                     "travelling": prev_travelling, "e_only": True})
 
-            # not in the notebook (off by default): MAX_C_STEP splits print moves near the turntable axis so none
-            # sweeps more than MAX_C_STEP of C (the machine moves C and X linearly)
-            num_c_steps = 1
-            if MAX_C_STEP and prev_new_position is not None and motion_extrusion is not None and motion_extrusion > 0:
-                d_theta = (math.atan2(float(new_position[1]), float(new_position[0]))
-                           - math.atan2(float(prev_new_position[1]), float(prev_new_position[0])))
-                d_theta = abs((d_theta + math.pi) % (2 * math.pi) - math.pi)
-                if d_theta > MAX_C_STEP:
-                    num_c_steps = int(d_theta / MAX_C_STEP) + 1
-            if num_c_steps > 1 and np.abs(rotation - prev_rotation) <= ROTATION_MAX_DELTA:
+            # not in the notebook (off by default): MAX_C_STEP cuts print moves (not the unretract) near the turntable
+            # axis so no piece sweeps more than MAX_C_STEP of C (the machine moves C and X linearly). Where to cut,
+            # and each piece's E and feed: the shared s4/fast_map.py c_split_fractions / split_pieces
+            c_fractions = None
+            if (MAX_C_STEP and prev_new_position is not None and motion_extrusion is not None and motion_extrusion > 0
+                    and motion_extrusion != RETRACTION_LENGTH and motion_extrusion != -RETRACTION_LENGTH):
+                from .fast_map import c_split_fractions
+                n_rot = 1
+                if np.abs(rotation - prev_rotation) > ROTATION_MAX_DELTA:
+                    n_rot = int(np.abs(rotation - prev_rotation) / ROTATION_MAX_DELTA) + 1
+                c_fractions = c_split_fractions(float(prev_new_position[0]), float(prev_new_position[1]),
+                                                float(new_position[0]), float(new_position[1]), MAX_C_STEP, n_rot)
+            if c_fractions is not None:
+                from .fast_map import split_pieces
+                rotation_steps = np.abs(rotation - prev_rotation) > ROTATION_MAX_DELTA
                 delta_pos = new_position - prev_new_position
                 delta_rotation = rotation - prev_rotation
-                for i in range(num_c_steps):
+                for frac, piece_extrusion, piece_inv_time_feed in split_pieces(c_fractions, motion_extrusion, inv_time_feed):
                     new_gcode_points.append({
-                        "position": prev_new_position + (delta_pos * ((i + 1) / num_c_steps)),
+                        "position": prev_new_position + (delta_pos * frac),
                         "original_position": position,
-                        "rotation": prev_rotation + (delta_rotation * ((i + 1) / num_c_steps)),
-                        "command": move_command,
-                        "extrusion": motion_extrusion / num_c_steps,
-                        "inv_time_feed": inv_time_feed * num_c_steps if inv_time_feed is not None else None,
+                        "rotation": prev_rotation + (delta_rotation * frac),
+                        "command": (move_command if SAFE_TRAVEL_TRANSITIONS else prev_command) if rotation_steps else move_command,
+                        "extrusion": piece_extrusion,
+                        "inv_time_feed": piece_inv_time_feed,
                         "extrusion_multiplier": extrusion_multiplier,
                         "feed": gcode_point["feed"],
-                        "travelling": travelling
+                        "travelling": prev_travelling if rotation_steps else travelling
                     })
             elif prev_rotation is not None and prev_new_position is not None and np.abs(rotation - prev_rotation) > ROTATION_MAX_DELTA:
                 delta_rotation = rotation - prev_rotation
-                num_interpolations = max(int(np.abs(delta_rotation) / ROTATION_MAX_DELTA) + 1, num_c_steps)
+                num_interpolations = int(np.abs(delta_rotation) / ROTATION_MAX_DELTA) + 1
                 delta_pos = new_position - prev_new_position
                 for i in range(num_interpolations):
                     new_gcode_points.append({
