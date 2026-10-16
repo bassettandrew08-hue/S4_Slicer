@@ -207,7 +207,18 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
         # rest of the part keeps the fit's shape. The adjoint uses the same held stiffness.
         from scipy.sparse.csgraph import dijkstra
         h0 = priority_flood(V, nbrs, slope, bed_tol=0.5, bed=_grounded(V, bed))
+        _check_flood(h0, "PIT_FREE")
         pit0 = np.nonzero(h0 - V[:, 2] > max(0.02, float(q["PIT_FREE_SEED_DEPTH"])))[0]
+        if not len(pit0):
+            # no pit deeper than PIT_FREE_SEED_DEPTH: nothing to confine the change to, so the field stays as it is
+            # (without a mask the rounds would change the whole field)
+            d0 = h0 - V[:, 2]
+            p0 = np.nonzero(d0 > 0.02)[0]
+            depth0 = round(float(d0[p0].sum()), 2)
+            info = {"pit_vertices_before": len(p0), "pit_depth_before": depth0, "pit_vertices": len(p0),
+                    "pit_depth": depth0, "pit_free_rounds": 0}
+            rf = np.asarray(rotation_field, np.float64).copy()
+            return rf, rotation_matrices(cell_centers, rf), V, info
         if len(pit0):
             dist = dijkstra(_edge_graph(prob.P0, nbrs), directed=False, indices=pit0, min_only=True, limit=region_mm)
             t = np.clip((region_mm - dist) / (0.5 * region_mm), 0.0, 1.0)
@@ -231,6 +242,7 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
     k = 0
     for k in range(rounds + 1):
         h, src = priority_flood(V, nbrs, slope, bed_tol=0.5, bed=_grounded(V, bed), spill=True)
+        _check_flood(h, "PIT_FREE")
         d = h - V[:, 2]
         pit = np.nonzero(d > 0.02)[0]
         depth = float(d[pit].sum())
@@ -264,6 +276,16 @@ def pit_free_field(prob, cell_centers, rotation_field, V, bed, nbrs, q, solve):
     return rf, R, V, info
 
 
+def _check_flood(h, what):
+    """The priority flood reaches every vertex connected to the bed through the mesh; an infinite level means a body
+    that is not (a separate shell floating above the bed), which no height target can fix."""
+    bad = ~np.isfinite(h)
+    if bad.any():
+        raise ValueError(f"{what}: {int(bad.sum())} mesh vertices are not connected to the bed through the mesh "
+                         f"(a separate body that does not touch the bed?); the island lift cannot place them. "
+                         f"Join the bodies or move them onto the bed.")
+
+
 def _edge_graph(P, nbrs):
     """Sparse symmetric graph of the mesh edges weighted by their length in P."""
     from scipy.sparse import csr_matrix
@@ -281,10 +303,13 @@ def surface_edges(cells):
     return np.unique(np.sort(np.vstack([sf[:, [0, 1]], sf[:, [1, 2]], sf[:, [0, 2]]]), axis=1), axis=0)
 
 
-def harmonic_fill(z, region, P, edges):
+def harmonic_fill(z, region, P, edges, fallback=None):
     """z with the region's values replaced by the harmonic interpolation (1/length^2 edge weights over `edges`, which
-    obey the discrete maximum principle: no minima or maxima inside) of z on the region's boundary."""
+    obey the discrete maximum principle: no minima or maxima inside) of z on the region's boundary. A connected part
+    of the region with no boundary (a whole surface shell inside it) has no rim to interpolate from (its Laplacian is
+    singular): it keeps `fallback` (default z)."""
     from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import connected_components
     from scipy.sparse.linalg import spsolve
     n = len(z)
     a, b = edges[:, 0], edges[:, 1]
@@ -301,7 +326,18 @@ def harmonic_fill(z, region, P, edges):
                    shape=(len(D), len(D))) - Wd[:, D]
     out = np.ones(n, bool)
     out[D] = False
-    f[D] = spsolve(L.tocsc(), Wd[:, out] @ z[out])
+    rhs = Wd[:, out] @ z[out]
+    _, comp = connected_components(Wd[:, D], directed=False)
+    rim = np.zeros(comp.max() + 1, bool)
+    rim[comp[np.asarray(Wd[:, out].sum(1)).ravel() > 0]] = True
+    ok = rim[comp]
+    if not ok.all():
+        f[D[~ok]] = (z if fallback is None else fallback)[D[~ok]]
+        if not ok.any():
+            return f
+        L = L.tocsr()[ok][:, ok]
+        D, rhs = D[ok], rhs[ok]
+    f[D] = spsolve(L.tocsc(), rhs)
     return f
 
 
@@ -315,7 +351,7 @@ def band_fill(P0, V, nbrs, sedges, region, h, slope, bed):
     on_s = np.zeros(len(z), bool)
     on_s[sedges.ravel()] = True
     f = np.where(region, np.maximum(z, h), z)
-    f = np.where(region & on_s, harmonic_fill(z, region & on_s, P0, sedges), f)
+    f = np.where(region & on_s, harmonic_fill(z, region & on_s, P0, sedges, fallback=f), f)
     Vf = V.copy()
     Vf[:, 2] = f
     return np.maximum(f, priority_flood(Vf, nbrs, slope, bed_tol=0.5, bed=bed))
@@ -353,6 +389,7 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
     t_fit = time.perf_counter() - t0
     nbrs = vertex_graph(np.asarray(cells), len(P0))
     pit_info = None
+    rotation_field_in = rotation_field  # Byrd's field (PIT_FREE_ROUNDS replaces rotation_field below)
     if int(q["PIT_FREE_ROUNDS"]) > 0:
         if q["FIT_METHOD"] != "penalty":
             raise ValueError("PIT_FREE_ROUNDS needs FIT_METHOD 'penalty'")
@@ -398,6 +435,7 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
         for _ in range(int(q["ISLAND_LIFT_ROUNDS"])):
             g = _grounded(V, bed)
             h = priority_flood(V, nbrs, float(q["ISLAND_LIFT_SLOPE"]), bed_tol=0.5, bed=g)
+            _check_flood(h, "island lift")
             need = (h - V[:, 2]) > 0.02
             if not need.any():
                 break
@@ -449,15 +487,19 @@ def deform(points, cells, cell_centers, rotation_field, p, lift=True, log=None):
         return float(x[o][np.searchsorted(cw, cw[-1] / 2)])
     # tilt that matters for the B axis: rotation about the tangential axis, volume-weighted, where >20 deg is wanted
     achieved = abs(_wmed(about_t[sel], prob.vol[sel])) if sel.any() else 0.0
-    wanted = abs(_wmed(want[sel], prob.vol[sel])) if sel.any() else 0.0
+    wanted = abs(_wmed(want[sel], prob.vol[sel])) if sel.any() else 0.0  # the field the fit aimed for
+    want0 = np.degrees(np.asarray(rotation_field_in, np.float64))
+    sel0 = np.abs(want0) > 20.0
+    wanted0 = abs(_wmed(want0[sel0], prob.vol[sel0])) if sel0.any() else 0.0  # Byrd's field
     info = {"seconds": round(time.perf_counter() - t0, 2), "fit_seconds": round(t_fit, 2), "iterations": iters,
             "inverted_tets": int((det <= 0).sum()),
             "inverted_volume_pct": round(100.0 * float(prob.vol[det <= 0].sum() / prob.vol.sum()), 4),
-            "tilt_deg": round(achieved, 1), "target_tilt_deg": round(wanted, 1),
+            "tilt_deg": round(achieved, 1), "target_tilt_deg": round(wanted0, 1),
             "lifted_vertices": lifted, "island_seeds": len(seeds),
             "island_mass": round(float(sum((d - b) * m for _, b, d, m in seeds)), 1)}
     if pit_info is not None:
         info.update(pit_info)
+        info["pit_free_target_tilt_deg"] = round(wanted, 1)  # the changed field's; target_tilt_deg is Byrd's
     if log:
         log(f"[deform] island-free: {info}")
         if wanted > 5 and achieved < 0.7 * wanted:
